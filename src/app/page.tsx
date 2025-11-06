@@ -2,6 +2,7 @@
 
 import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
@@ -166,29 +167,45 @@ export default function LibraryPage() {
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {books.map((book) => (
-              <button
-                key={book._id}
-                type="button"
-                onClick={() => handleOpenBook(book._id)}
-                className="group flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus:outline-none dark:border-zinc-800 dark:bg-black"
-              >
-                <div className="mb-3 aspect-[3/4] w-full rounded-lg border border-dashed border-zinc-300 bg-gradient-to-br from-zinc-50 to-zinc-200 text-xs text-zinc-400 transition group-hover:border-zinc-400 dark:border-zinc-800 dark:from-zinc-900 dark:to-zinc-950 dark:text-zinc-600">
-                  <span className="flex h-full items-center justify-center">
-                    No cover
-                  </span>
-                </div>
-                <h2 className="line-clamp-2 text-base font-semibold text-foreground">
-                  {book.title}
-                </h2>
-                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                  {book.author ?? "Unknown"}
-                </p>
-                <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                  {formatFileSize(book.sizeBytes)}
-                </p>
-              </button>
-            ))}
+            {books.map((book) => {
+              const author = book.author?.trim();
+              const coverSrc = book.coverUrl ?? "/placeholder-cover.png";
+
+              return (
+                <button
+                  key={book._id}
+                  type="button"
+                  onClick={() => handleOpenBook(book._id)}
+                  className="group flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus:outline-none dark:border-zinc-800 dark:bg-black"
+                >
+                  <div className="relative mb-3 aspect-[3/4] w-full overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 transition group-hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900">
+                    <Image
+                      src={coverSrc}
+                      alt={`${book.title} cover`}
+                      fill
+                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                      className="object-cover"
+                      onError={(event) => {
+                        event.currentTarget.onerror = null;
+                        event.currentTarget.src = "/placeholder-cover.png";
+                        event.currentTarget.srcset = "/placeholder-cover.png";
+                      }}
+                    />
+                  </div>
+                  <h2 className="line-clamp-2 text-base font-semibold text-foreground">
+                    {book.title}
+                  </h2>
+                  {author && (
+                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                      {author}
+                    </p>
+                  )}
+                  <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                    {formatFileSize(book.sizeBytes)}
+                  </p>
+                </button>
+              );
+            })}
           </div>
         )}
       </section>

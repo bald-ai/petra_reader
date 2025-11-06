@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "convex/_generated/**",
+    // Temporary playground that will be removed once the new UI is validated.
+    "code/**",
   ]),
 ]);
 
