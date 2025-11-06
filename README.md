@@ -32,55 +32,34 @@ Open http://localhost:3000 to view the app.
 
 ## Convex Setup (manual steps)
 
-Convex needs an authenticated CLI session tied to your account, so run the following locally:
+Convex uses CLI auth tied to your account. For fresh environments:
 
-1. Authenticate and create the Convex project:
+1. Authenticate and start the dev deployment:
    ```bash
    npx convex dev
    ```
-   - Sign in with GitHub when prompted.
-   - Accept the prompts to create a new project.
-   - This command generates the `convex/` directory and keeps the dev sync process running.
+   - Sign in with GitHub when prompted (device flow).
+   - Create/select the `petra_reader` project.
+   - The command stays running to sync the functions in `convex/`.
 
-2. In a second terminal, seed sample data (optional but mirrors the quickstart):
+2. (Optional) Seed sample data via the mutation:
    ```bash
-   cat <<'EOF' > sampleData.jsonl
-   {"text": "Buy groceries", "isCompleted": true}
-   {"text": "Go for a swim", "isCompleted": true}
-   {"text": "Integrate Convex", "isCompleted": false}
-   EOF
-
-   npx convex import --table tasks sampleData.jsonl
+   npx convex run books:add --title "Pattern Recognition"
+   npx convex run books:add --title "The Left Hand of Darkness"
+   npx convex run books:add --title "Neuromancer"
    ```
 
-3. Add your first query by editing `convex/tasks.ts` (file created by the CLI) with:
-   ```ts
-   import { query } from "./_generated/server";
-
-   export const get = query({
-     args: {},
-     handler: async (ctx) => {
-       return await ctx.db.query("tasks").collect();
-     },
-   });
+3. Ensure `.env.local` contains the values printed by the CLI:
+   ```
+   CONVEX_DEPLOYMENT=dev:...
+   NEXT_PUBLIC_CONVEX_URL=https://....convex.cloud
    ```
 
-4. Provide the Convex URL to the frontend:
-   - Copy `NEXT_PUBLIC_CONVEX_URL` from the CLI output.
-   - Add it to `.env.local`:
-     ```
-     NEXT_PUBLIC_CONVEX_URL="https://YOUR-CONVEX-DEPLOYMENT.convex.cloud"
-     ```
-
-5. Restart `npm run dev` so the env var is picked up. After wiring the provider (coming next), the homepage will read from `api.tasks.get`.
+The backend logic lives in `convex/schema.ts` and `convex/books.ts`, and the homepage consumes the `books.list` query + `books.add` mutation in real time.
 
 ## Next Steps
 
-- Wire up `ConvexClientProvider` in `src/app/layout.tsx` and render Convex data on the landing page.
-- Stage & commit the scaffold:
-  ```bash
-  git add .
-  git commit -m "chore: scaffold Next.js + Tailwind base project"
-  ```
-- Push to `main` and verify GitHub updates.
-- Proceed to Phase 4 (Netlify) once Convex is initialized and the “Add Book” flow is ready.
+- ✅ Convex provider is wired in `src/app/layout.tsx`.
+- ✅ Homepage renders the Convex book list and supports the “Add Book” mutation.
+- ☐ Move to Phase 4 (Netlify) by connecting the repo and verifying deploys.
+- ☐ Expand datastore & UI once hosting loop is proven.
