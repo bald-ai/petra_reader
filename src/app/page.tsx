@@ -1,105 +1,196 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { api } from "../../convex/_generated/api";
+import { useRouter } from "next/navigation";
+import { api } from "@convex/_generated/api";
+import type { Id } from "@convex/_generated/dataModel";
+import { formatFileSize } from "@/lib/format";
 
-export default function Home() {
-  const books = useQuery(api.books.list);
-  const addBook = useMutation(api.books.add);
+type SortOption = "title" | "recent";
 
-  const [title, setTitle] = useState("");
+const sortLabels: Record<SortOption, string> = {
+  title: "Title A→Z",
+  recent: "Recently opened",
+};
+
+export default function LibraryPage() {
+  const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>("title");
   const [error, setError] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setError(null);
-    const trimmed = title.trim();
-    if (!trimmed) {
-      setError("Please enter a book title.");
+  const books = useQuery(api.books.list, useMemo(() => ({ sortBy }), [sortBy]));
+  const generateUploadUrl = useMutation(api.books.generateUploadUrl);
+  const createBook = useMutation(api.books.create);
+  const touchOpen = useMutation(api.books.touchOpen);
+
+  const triggerFilePicker = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFilesSelected = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    if (selectedFiles.length === 0) {
       return;
     }
 
+    setError(null);
+    setIsUploading(true);
+
     try {
-      setIsSubmitting(true);
-      await addBook({ title: trimmed });
-      setTitle("");
+      for (const file of selectedFiles) {
+        if (!file.name.toLowerCase().endsWith(".epub")) {
+          setError("Only .epub files are supported.");
+          continue;
+        }
+
+        const title = file.name.replace(/\.epub$/i, "").trim();
+        const uploadUrl = await generateUploadUrl();
+        const response = await fetch(uploadUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type || "application/epub+zip",
+          },
+          body: file,
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to upload file to storage.");
+        }
+
+        const { storageId } = (await response.json()) as {
+          storageId?: Id<"_storage"> | string;
+        };
+
+        if (!storageId) {
+          throw new Error("No storage ID returned after upload.");
+        }
+
+        await createBook({
+          storageId: storageId as Id<"_storage">,
+          filename: file.name,
+          title: title.length > 0 ? title : undefined,
+        });
+      }
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Something went wrong. Try again.",
+        err instanceof Error
+          ? err.message
+          : "Upload failed. Please try again.",
       );
     } finally {
-      setIsSubmitting(false);
+      setIsUploading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
     }
   };
 
+  const handleOpenBook = async (bookId: Id<"books">) => {
+    try {
+      await touchOpen({ bookId });
+    } catch (err) {
+      console.error(err);
+    }
+    router.push(`/reader/${bookId}`);
+  };
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-10 bg-background px-6 py-16 text-foreground sm:px-12">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Petra Reader – Book List
-        </h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          This page reads from Convex in real time. Add a title to watch it sync
-          instantly across connected clients.
-        </p>
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 bg-background px-6 py-12 text-foreground sm:px-10">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Library</h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            Upload EPUBs to keep them in sync via Convex storage.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="text-sm text-zinc-600 dark:text-zinc-400">
+            Sort by
+            <select
+              className="ml-2 rounded-md border border-zinc-300 bg-background px-3 py-2 text-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-900"
+              value={sortBy}
+              onChange={(event) => setSortBy(event.target.value as SortOption)}
+              disabled={books === undefined}
+            >
+              {Object.entries(sortLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={triggerFilePicker}
+            className="inline-flex items-center justify-center rounded-full bg-foreground px-5 py-2 text-sm font-semibold text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={isUploading}
+          >
+            {isUploading ? "Uploading…" : "Upload EPUB"}
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".epub"
+            multiple
+            hidden
+            onChange={handleFilesSelected}
+          />
+        </div>
       </header>
 
-      <section className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-black">
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Book title
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              className="mt-1 w-full rounded-md border border-zinc-300 bg-background px-3 py-2 text-base shadow-sm outline-none transition focus:border-zinc-500 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-700 dark:bg-zinc-900"
-              placeholder="e.g. The Left Hand of Darkness"
-              maxLength={120}
-              disabled={isSubmitting}
-            />
-          </label>
-          {error && (
-            <p className="text-sm text-red-500" role="alert">
-              {error}
-            </p>
-          )}
-          <button
-            type="submit"
-            className="inline-flex items-center justify-center rounded-full bg-foreground px-6 py-2 text-sm font-semibold text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Adding…" : "Add Book"}
-          </button>
-        </form>
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-lg font-semibold">Books</h2>
-        <div className="space-y-2 rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-black">
-          {books === undefined && (
-            <p className="text-sm text-zinc-500">Loading books…</p>
-          )}
-          {books && books.length === 0 && (
-            <p className="text-sm text-zinc-500">
-              No books yet. Add your first title above.
-            </p>
-          )}
-          {books?.map((book) => (
-            <article
-              key={book._id}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 bg-background px-4 py-3 text-sm dark:border-zinc-800"
-            >
-              <span className="font-medium">{book.title}</span>
-              <time
-                className="text-xs text-zinc-500"
-                dateTime={new Date(book.createdAt).toISOString()}
-              >
-                {new Date(book.createdAt).toLocaleString()}
-              </time>
-            </article>
-          ))}
+      {error && (
+        <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-200">
+          {error}
         </div>
+      )}
+
+      <section className="flex-1">
+        {books === undefined ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div
+                key={index}
+                className="h-36 animate-pulse rounded-xl border border-zinc-200 bg-white/80 dark:border-zinc-800 dark:bg-black/30"
+              />
+            ))}
+          </div>
+        ) : books.length === 0 ? (
+          <div className="flex h-60 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-black dark:text-zinc-400">
+            <p className="font-medium text-zinc-600 dark:text-zinc-300">
+              No books yet
+            </p>
+            <p>Upload an EPUB to get started.</p>
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {books.map((book) => (
+              <button
+                key={book._id}
+                type="button"
+                onClick={() => handleOpenBook(book._id)}
+                className="group flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus:outline-none dark:border-zinc-800 dark:bg-black"
+              >
+                <div className="mb-3 aspect-[3/4] w-full rounded-lg border border-dashed border-zinc-300 bg-gradient-to-br from-zinc-50 to-zinc-200 text-xs text-zinc-400 transition group-hover:border-zinc-400 dark:border-zinc-800 dark:from-zinc-900 dark:to-zinc-950 dark:text-zinc-600">
+                  <span className="flex h-full items-center justify-center">
+                    No cover
+                  </span>
+                </div>
+                <h2 className="line-clamp-2 text-base font-semibold text-foreground">
+                  {book.title}
+                </h2>
+                <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+                  {book.author ?? "Unknown"}
+                </p>
+                <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  {formatFileSize(book.sizeBytes)}
+                </p>
+              </button>
+            ))}
+          </div>
+        )}
       </section>
     </main>
   );
