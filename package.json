@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "GOOGLE_APPLICATION_CREDENTIALS=./gen-lang-client-0029722726-1c17e946b90e.json GOOGLE_CLOUD_PROJECT=gen-lang-client-0029722726 next dev",
+    "build": "GOOGLE_APPLICATION_CREDENTIALS=./gen-lang-client-0029722726-1c17e946b90e.json GOOGLE_CLOUD_PROJECT=gen-lang-client-0029722726 next build",
+    "start": "GOOGLE_APPLICATION_CREDENTIALS=./gen-lang-client-0029722726-1c17e946b90e.json GOOGLE_CLOUD_PROJECT=gen-lang-client-0029722726 next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@google-cloud/translate": "^9.2.1",
     "@radix-ui/react-scroll-area": "^1.2.2",
     "@radix-ui/react-separator": "^1.1.1",
     "@radix-ui/react-slot": "^1.1.0",

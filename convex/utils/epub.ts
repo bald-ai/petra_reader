@@ -17,7 +17,7 @@ type ExtractOptions = {
   maxParagraphs?: number;
 };
 
-const DEFAULT_MAX_PARAGRAPHS = 400;
+const DEFAULT_MAX_PARAGRAPHS = 20;
 
 export async function extractParagraphsFromEpub(
   rawData: ArrayBuffer,

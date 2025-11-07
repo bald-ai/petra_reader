@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
-import LanguageReader, { Paragraph } from "@/components/language-reader";
+import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
 
 export default function ReaderPage() {
   const router = useRouter();
@@ -44,13 +44,14 @@ export default function ReaderPage() {
           return;
         }
 
-        const mapped: Paragraph[] = (result?.paragraphs ?? []).map(
-          (paragraph) => ({
+        const mapped: Paragraph[] = (result?.paragraphs ?? []).map((paragraph) => {
+          const fallback = defaultParagraphs.find((item) => item.id === paragraph.id);
+          return {
             id: paragraph.id,
-            text: paragraph.text,
-            translation: null,
-          }),
-        );
+            spanish: paragraph.text ?? fallback?.spanish ?? "",
+            english: fallback?.english ?? "",
+          };
+        });
 
         setParagraphs(mapped);
 

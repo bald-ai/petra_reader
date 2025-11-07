@@ -26,6 +26,7 @@ dist/
 .DS_Store
 *.pem
 tmp/
+/gen-lang-client-0029722726-1c17e946b90e.json
 
 # debug
 npm-debug.log*

@@ -30,6 +30,18 @@ npm run dev
 
 Open http://localhost:3000 to view the app.
 
+## Google Translate credentials
+
+The project uses `@google-cloud/translate` for translation functionality. Drop the service-account JSON in the project root as
+`gen-lang-client-0029722726-1c17e946b90e.json` (gitignored). The npm scripts automatically export:
+
+```
+GOOGLE_APPLICATION_CREDENTIALS=./gen-lang-client-0029722726-1c17e946b90e.json
+GOOGLE_CLOUD_PROJECT=gen-lang-client-0029722726
+```
+
+For Netlify or other hosts, set both env vars (the project uses the `GOOGLE_CLOUD_PROJECT` name everywhere).
+
 ## Convex Setup (manual steps)
 
 Convex uses CLI auth tied to your account. For fresh environments:
