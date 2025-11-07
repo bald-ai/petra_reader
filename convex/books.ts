@@ -159,6 +159,33 @@ export const getFileUrl = query({
   },
 });
 
+export const remove = mutation({
+  args: {
+    bookId: v.id("books"),
+  },
+  handler: async (ctx, { bookId }) => {
+    const book = await ctx.db.get(bookId);
+    if (!book) {
+      throw new Error("Book not found.");
+    }
+
+    // Delete the book record from the database
+    await ctx.db.delete(bookId);
+
+    // Optionally delete the file from storage if storageId exists
+    if (book.storageId) {
+      try {
+        await ctx.storage.delete(book.storageId);
+      } catch (error) {
+        // Log error but don't fail the deletion if storage deletion fails
+        console.warn("Failed to delete book file from storage:", error);
+      }
+    }
+
+    return { success: true };
+  },
+});
+
 export const get = query({
   args: {
     bookId: v.id("books"),

@@ -1,17 +1,86 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
-import LanguageReader from "@/components/language-reader";
+import LanguageReader, { Paragraph } from "@/components/language-reader";
 
 export default function ReaderPage() {
   const router = useRouter();
   const routeParams = useParams<{ bookId: string }>();
   const bookId = routeParams?.bookId as Id<"books"> | undefined;
   const book = useQuery(api.books.get, bookId ? { bookId } : "skip");
+  const fetchContent = useAction(api.bookContent.content);
+  const touchOpen = useMutation(api.books.touchOpen);
+  const [paragraphs, setParagraphs] = useState<Paragraph[] | null>(null);
+  const [isContentLoading, setIsContentLoading] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
+  const hasTouchedRef = useRef(false);
+
+  useEffect(() => {
+    hasTouchedRef.current = false;
+  }, [bookId]);
+
+  useEffect(() => {
+    if (!bookId) {
+      setParagraphs(null);
+      setContentError(null);
+      setIsContentLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+    setParagraphs(null);
+    setIsContentLoading(true);
+    setContentError(null);
+
+    const loadContent = async () => {
+      try {
+        const result = await fetchContent({ bookId });
+        if (isCancelled) {
+          return;
+        }
+
+        const mapped: Paragraph[] = (result?.paragraphs ?? []).map(
+          (paragraph) => ({
+            id: paragraph.id,
+            text: paragraph.text,
+            translation: null,
+          }),
+        );
+
+        setParagraphs(mapped);
+
+        if (!hasTouchedRef.current) {
+          touchOpen({ bookId }).catch((error) => {
+            console.error("Failed to record open event", error);
+          });
+          hasTouchedRef.current = true;
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setContentError(
+            error instanceof Error
+              ? error.message
+              : "Failed to load book content.",
+          );
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsContentLoading(false);
+        }
+      }
+    };
+
+    void loadContent();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [bookId, fetchContent, touchOpen]);
 
   if (!bookId) {
     return (
@@ -40,10 +109,38 @@ export default function ReaderPage() {
     );
   }
 
+  if (contentError) {
+    return (
+      <ReaderFallback
+        title="Unable to load this book"
+        description={contentError}
+      />
+    );
+  }
+
+  if (isContentLoading || paragraphs === null) {
+    return (
+      <ReaderFallback
+        title="Preparing book text…"
+        description="Extracting the paragraphs from the EPUB file."
+      />
+    );
+  }
+
+  if (paragraphs.length === 0) {
+    return (
+      <ReaderFallback
+        title="No readable content found"
+        description="We couldn't find any paragraphs inside this EPUB file."
+      />
+    );
+  }
+
   return (
     <LanguageReader
       title={book.title}
       subtitle={book.author?.trim() ?? null}
+      paragraphs={paragraphs}
       onBack={() => router.push("/")}
     />
   );

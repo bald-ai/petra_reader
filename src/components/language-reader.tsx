@@ -11,8 +11,8 @@ import { Separator } from "@/components/ui/separator"
 
 export interface Paragraph {
   id: number
-  spanish: string
-  english: string
+  text: string
+  translation?: string | null
 }
 
 interface WordDefinition {
@@ -37,23 +37,23 @@ interface WordDefinition {
 const defaultParagraphs: Paragraph[] = [
   {
     id: 1,
-    spanish:
+    text:
       "También estaba solo. Tragué, con un chasquido en la garganta, y traté de mantener la calma mientras repasaba los hechos. Uno: había habido un incidente en la base. Dos: la última vez que estuve consciente, estaba atrapado en una celda con Wyn el Soul Eater, sin poder salir.",
-    english:
+    translation:
       "I was also alone. I swallowed, with a click in my throat, and tried to stay calm while going over the facts. One: there had been an incident at the base. Two: the last time I was aware, I was trapped in a cell with Wyn the Soul Eater, unable to escape.",
   },
   {
     id: 2,
-    spanish:
+    text:
       "Tres: ahora estaba en una habitación de motel, así que definitivamente estaba fuera de la base. Cuatro: estaba vivo, así que Wyn no me había matado. Otra vez.",
-    english:
+    translation:
       "Three: I was now in a motel room, so I was definitely out of the base. Four: I was alive, so Wyn hadn't killed me. Again.",
   },
   {
     id: 3,
-    spanish:
+    text:
       "Eso significaba que alguien debía haberme sacado de la celda de Wyn después de resolver el incidente. Tal vez la base había sido comprometida y todos habíamos sido trasladados mientras se resolvía. Ese parecía el escenario más probable.",
-    english:
+    translation:
       "That meant someone must have gotten me out of Wyn's cell after resolving the incident. Maybe the base had been compromised and we had all been relocated while it was being resolved. That seemed like the most likely scenario.",
   },
 ]
@@ -218,47 +218,54 @@ export default function LanguageReader({
 
       <ScrollArea className="flex-1">
         <div className="max-w-4xl mx-auto px-6 py-8 pb-96 space-y-6">
-          {paragraphs.map((paragraph) => (
-            <div key={paragraph.id}>
-              {visibleTranslations.has(paragraph.id) ? (
-                <Card className="p-6 border-border/50 shadow-sm hover:shadow-md transition-shadow duration-200">
-                  <div className="flex gap-4 items-start">
-                    <div className="flex-1 space-y-3">
-                      <p className="text-lg leading-relaxed text-foreground font-serif">
-                        {renderClickableText(paragraph.spanish, paragraph.id)}
-                      </p>
-                      <Separator className="my-3" />
-                      <p className="text-base leading-relaxed text-muted-foreground animate-in fade-in-50 duration-300">
-                        {paragraph.english}
-                      </p>
+          {paragraphs.map((paragraph) => {
+            const translationText = paragraph.translation?.trim()
+            const hasTranslation = Boolean(translationText && translationText.length > 0)
+            const showTranslation = hasTranslation && visibleTranslations.has(paragraph.id)
+            return (
+              <div key={paragraph.id}>
+                {showTranslation ? (
+                  <Card className="p-6 border-border/50 shadow-sm hover:shadow-md transition-shadow duration-200">
+                    <div className="flex gap-4 items-start">
+                      <div className="flex-1 space-y-3">
+                        <p className="text-lg leading-relaxed text-foreground font-serif">
+                          {renderClickableText(paragraph.text, paragraph.id)}
+                        </p>
+                        <Separator className="my-3" />
+                        <p className="text-base leading-relaxed text-muted-foreground animate-in fade-in-50 duration-300">
+                          {translationText}
+                        </p>
+                      </div>
+                      <Button
+                        variant="default"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 mt-1 transition-all duration-200"
+                        onClick={() => handleParagraphClick(paragraph.id)}
+                      >
+                        <Link2 className="h-4 w-4" />
+                      </Button>
                     </div>
-                    <Button
-                      variant="default"
-                      size="icon"
-                      className="h-9 w-9 shrink-0 mt-1 transition-all duration-200"
-                      onClick={() => handleParagraphClick(paragraph.id)}
-                    >
-                      <Link2 className="h-4 w-4" />
-                    </Button>
+                  </Card>
+                ) : (
+                  <div className="flex gap-4 items-start group">
+                    <p className="flex-1 text-lg leading-relaxed text-foreground font-serif">
+                      {renderClickableText(paragraph.text, paragraph.id)}
+                    </p>
+                    {hasTranslation && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9 shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-all duration-200"
+                        onClick={() => handleParagraphClick(paragraph.id)}
+                      >
+                        <Link2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
-                </Card>
-              ) : (
-                <div className="flex gap-4 items-start group">
-                  <p className="flex-1 text-lg leading-relaxed text-foreground font-serif">
-                    {renderClickableText(paragraph.spanish, paragraph.id)}
-                  </p>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-all duration-200"
-                    onClick={() => handleParagraphClick(paragraph.id)}
-                  >
-                    <Link2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            )
+          })}
         </div>
       </ScrollArea>
 

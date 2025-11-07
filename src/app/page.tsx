@@ -4,6 +4,7 @@ import { ChangeEvent, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import { Trash2 } from "lucide-react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { formatFileSize } from "@/lib/format";
@@ -25,7 +26,7 @@ export default function LibraryPage() {
   const books = useQuery(api.books.list, useMemo(() => ({ sortBy }), [sortBy]));
   const generateUploadUrl = useMutation(api.books.generateUploadUrl);
   const createBook = useMutation(api.books.create);
-  const touchOpen = useMutation(api.books.touchOpen);
+  const deleteBook = useMutation(api.books.remove);
 
   const triggerFilePicker = () => {
     fileInputRef.current?.click();
@@ -89,13 +90,25 @@ export default function LibraryPage() {
     }
   };
 
-  const handleOpenBook = async (bookId: Id<"books">) => {
-    try {
-      await touchOpen({ bookId });
-    } catch (err) {
-      console.error(err);
-    }
+  const handleOpenBook = (bookId: Id<"books">) => {
     router.push(`/reader/${bookId}`);
+  };
+
+  const handleDeleteBook = async (bookId: Id<"books">, bookTitle: string) => {
+    if (!window.confirm(`Are you sure you want to delete "${bookTitle}"? This action cannot be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteBook({ bookId });
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to delete book. Please try again.",
+      );
+    }
   };
 
   return (
@@ -154,13 +167,13 @@ export default function LibraryPage() {
             {Array.from({ length: 4 }).map((_, index) => (
               <div
                 key={index}
-                className="h-36 animate-pulse rounded-xl border border-zinc-200 bg-white/80 dark:border-zinc-800 dark:bg-black/30"
+                className="h-36 animate-pulse rounded-xl border border-border bg-card/80"
               />
             ))}
           </div>
         ) : books.length === 0 ? (
-          <div className="flex h-60 flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-black dark:text-zinc-400">
-            <p className="font-medium text-zinc-600 dark:text-zinc-300">
+          <div className="flex h-60 flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-card text-center text-sm text-muted-foreground">
+            <p className="font-medium text-foreground">
               No books yet
             </p>
             <p>Upload an EPUB to get started.</p>
@@ -172,38 +185,56 @@ export default function LibraryPage() {
               const coverSrc = book.coverUrl ?? "/placeholder-cover.png";
 
               return (
-                <button
+                <div
                   key={book._id}
-                  type="button"
-                  onClick={() => handleOpenBook(book._id)}
-                  className="group flex h-full flex-col rounded-xl border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md focus:outline-none dark:border-zinc-800 dark:bg-black"
+                  className="group relative flex h-full flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-foreground/20 hover:shadow-md"
                 >
-                  <div className="relative mb-3 aspect-[3/4] w-full overflow-hidden rounded-lg border border-zinc-200 bg-zinc-100 transition group-hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900">
-                    <Image
-                      src={coverSrc}
-                      alt={`${book.title} cover`}
-                      fill
-                      sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                      className="object-cover"
-                      onError={(event) => {
-                        event.currentTarget.onerror = null;
-                        event.currentTarget.src = "/placeholder-cover.png";
-                        event.currentTarget.srcset = "/placeholder-cover.png";
-                      }}
-                    />
-                  </div>
-                  <h2 className="line-clamp-2 text-base font-semibold text-foreground">
-                    {book.title}
-                  </h2>
-                  {author && (
-                    <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                      {author}
+                  {/* Delete button */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteBook(book._id, book.title);
+                    }}
+                    className="absolute right-2 top-2 z-10 rounded-full bg-background/90 p-2 text-red-500 opacity-0 shadow-sm transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 dark:bg-background/80 dark:hover:bg-red-950/50"
+                    title="Delete book"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+
+                  {/* Book content */}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenBook(book._id)}
+                    className="flex flex-1 flex-col focus:outline-none"
+                  >
+                    <div className="relative mb-3 aspect-[3/4] w-full overflow-hidden rounded-lg border border-border/80 bg-muted transition group-hover:border-foreground/20">
+                      <Image
+                        src={coverSrc}
+                        alt={`${book.title} cover`}
+                        fill
+                        sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                        className="object-cover"
+                        onError={(event) => {
+                          event.currentTarget.onerror = null;
+                          event.currentTarget.src = "/placeholder-cover.png";
+                          event.currentTarget.srcset = "/placeholder-cover.png";
+                        }}
+                      />
+                    </div>
+                    <h2 className="line-clamp-2 text-base font-semibold text-foreground">
+                      {book.title}
+                    </h2>
+                    {author && (
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {author}
+                      </p>
+                    )}
+                    <p className="mt-4 text-xs uppercase tracking-wide text-muted-foreground">
+                      {formatFileSize(book.sizeBytes)}
                     </p>
-                  )}
-                  <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-                    {formatFileSize(book.sizeBytes)}
-                  </p>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
