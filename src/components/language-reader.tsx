@@ -637,7 +637,7 @@ export default function LanguageReader({
                 {isTranslationVisible && hasTranslation ? (
                   renderTranslationView(paragraph)
                 ) : (
-                  <div className="group flex items-start gap-4">
+                  <div className="group flex items-baseline gap-4">
                     <p className="flex-1 font-serif text-lg leading-relaxed text-foreground">
                       {renderClickableText(paragraph.spanish, paragraph.id)}
                     </p>
@@ -645,7 +645,7 @@ export default function LanguageReader({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="mt-1 h-9 w-9 shrink-0 opacity-35 transition-all duration-200 hover:opacity-75"
+                        className="h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75"
                         onClick={() => handleParagraphClick(paragraph)}
                         aria-label="Show translation"
                       >
