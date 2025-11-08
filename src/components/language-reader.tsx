@@ -2,14 +2,11 @@
 
 import { useState } from "react"
 import { useAction } from "convex/react"
-import { ChevronLeft, HelpCircle, Link2, Loader2, MoreVertical, Plus, X } from "lucide-react"
+import { ChevronLeft, HelpCircle, Link2, Loader2, MoreVertical, X } from "lucide-react"
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Badge } from "@/components/ui/badge"
-import { Card } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
+import { cn } from "@/lib/utils"
 
 export interface Paragraph {
   id: number
@@ -238,6 +235,11 @@ const sampleDefinitions: Record<string, WordDefinition> = {
   },
 }
 
+type WordTranslationResult = {
+  word: string
+  translation: string
+}
+
 type LanguageReaderProps = {
   title?: string
   subtitle?: string | null
@@ -255,11 +257,65 @@ export default function LanguageReader({
   const [translations, setTranslations] = useState<Record<number, string>>({})
   const [translationErrors, setTranslationErrors] = useState<Record<number, string>>({})
   const [loadingTranslations, setLoadingTranslations] = useState<Set<number>>(new Set())
-  const [selectedWord, setSelectedWord] = useState<WordDefinition | null>(null)
-  const [activeTab, setActiveTab] = useState("translation")
+  const [activeWord, setActiveWord] = useState<string | null>(null)
+  const [wordTranslationResult, setWordTranslationResult] = useState<WordTranslationResult | null>(null)
+  const [wordTranslationError, setWordTranslationError] = useState<string | null>(null)
+  const [isWordTranslationLoading, setIsWordTranslationLoading] = useState(false)
+  const [isWordBarVisible, setIsWordBarVisible] = useState(false)
+  const [isWordBarExpanded, setIsWordBarExpanded] = useState(false)
+  const [wordDefinition, setWordDefinition] = useState<string | null>(null)
+  const [isWordDefinitionLoading, setIsWordDefinitionLoading] = useState(false)
+  const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
+  const [wordTranslationsCache, setWordTranslationsCache] = useState<Record<string, WordTranslationResult>>({})
   const translateParagraphAction = useAction(api.translations.translateParagraph)
+  const translateWordAction = useAction(api.translations.translateWord)
+  const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
 
   const hasVisibleTranslation = visibleTranslations.size > 0
+
+  const fetchWordTranslation = async (word: string) => {
+    if (!word) {
+      return
+    }
+
+    const normalizedKey = word.toLowerCase()
+    const cached = wordTranslationsCache[normalizedKey]
+    setWordTranslationError(null)
+
+    if (cached) {
+      setIsWordTranslationLoading(false)
+      setWordTranslationResult(cached)
+      if (!wordDefinition) {
+        void fetchWordDefinition(word)
+      }
+      return
+    }
+
+    setWordTranslationResult(null)
+    setIsWordTranslationLoading(true)
+
+    try {
+      const result = await translateWordAction({ word })
+      const payload: WordTranslationResult = {
+        word: result.word,
+        translation: result.translation,
+      }
+
+      setWordTranslationsCache((prev) => ({
+        ...prev,
+        [normalizedKey]: payload,
+      }))
+      setWordTranslationResult(payload)
+      
+      void fetchWordDefinition(word)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to translate this word right now."
+      setWordTranslationError(message)
+    } finally {
+      setIsWordTranslationLoading(false)
+    }
+  }
 
   const ensureTranslation = async (paragraph: Paragraph) => {
     if (translations[paragraph.id] || translationErrors[paragraph.id] || loadingTranslations.has(paragraph.id)) {
@@ -273,6 +329,7 @@ export default function LanguageReader({
     })
     setTranslationErrors((prev) => {
       const { [paragraph.id]: _removed, ...rest } = prev
+      void _removed
       return rest
     })
 
@@ -318,17 +375,52 @@ export default function LanguageReader({
   }
 
   const handleWordClick = (word: string) => {
-    const cleanWord = word.replace(/[.,;:!?"“”¿¡]/g, "")
-    const definition = sampleDefinitions[cleanWord]
-    if (!definition) {
+    const cleanWord = word.replace(/[.,;:!?"""¿¡]/g, "")
+    if (!cleanWord) {
       return
     }
-    if (selectedWord?.word === definition.word) {
-      setSelectedWord(null)
+
+    setActiveWord(cleanWord)
+    setIsWordBarVisible(true)
+    setIsWordBarExpanded(false)
+    setWordDefinition(null)
+    setWordDefinitionError(null)
+    void fetchWordTranslation(cleanWord)
+  }
+
+  const fetchWordDefinition = async (word: string) => {
+    if (!word) {
       return
     }
-    setSelectedWord(definition)
-    setActiveTab("translation")
+
+    setWordDefinitionError(null)
+    setIsWordDefinitionLoading(true)
+
+    try {
+      const result = await lookupWordDefinitionAction({ word })
+      setWordDefinition(result.definition)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to fetch definition right now."
+      setWordDefinitionError(message)
+      setWordDefinition(null)
+    } finally {
+      setIsWordDefinitionLoading(false)
+    }
+  }
+
+  const handleBarExpand = () => {
+    setIsWordBarExpanded(!isWordBarExpanded)
+  }
+
+  const closeWordBar = () => {
+    setIsWordBarVisible(false)
+    setIsWordBarExpanded(false)
+    setActiveWord(null)
+    setWordTranslationResult(null)
+    setWordTranslationError(null)
+    setWordDefinition(null)
+    setWordDefinitionError(null)
   }
 
   const renderClickableText = (text: string, paragraphId: number) => {
@@ -337,24 +429,36 @@ export default function LanguageReader({
       <span>
         {words.map((word, index) => {
           const cleanWord = word.replace(/[.,;:!?"“”¿¡]/g, "")
-          const hasDefinition = sampleDefinitions[cleanWord]
           const punctuation = word.match(/[.,;:!?"“”¿¡]/g)?.join("") ?? ""
+          if (!cleanWord) {
+            return (
+              <span key={`${paragraphId}-${index}`}>
+                {word}{" "}
+              </span>
+            )
+          }
+
+          const hasDefinition = Boolean(sampleDefinitions[cleanWord])
+          const isActiveWord = activeWord?.toLowerCase() === cleanWord.toLowerCase()
 
           return (
             <span key={`${paragraphId}-${index}`}>
-              {hasDefinition ? (
-                <span
-                  className="cursor-pointer underline decoration-primary/40 decoration-2 underline-offset-4 transition-all duration-200 hover:text-primary hover:decoration-primary"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    handleWordClick(word)
-                  }}
-                >
-                  {cleanWord}
-                </span>
-              ) : (
-                <span>{cleanWord}</span>
-              )}
+              <button
+                type="button"
+                className={cn(
+                  "inline cursor-pointer rounded-sm bg-transparent px-0 text-left text-current underline-offset-4 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
+                  hasDefinition
+                    ? "underline decoration-primary/40 decoration-2 hover:text-primary hover:decoration-primary"
+                    : "hover:text-primary/80",
+                  isActiveWord && "bg-primary/10 text-primary",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  handleWordClick(word)
+                }}
+              >
+                {cleanWord}
+              </button>
               {punctuation}{" "}
             </span>
           )
@@ -399,12 +503,91 @@ export default function LanguageReader({
               </p>
             </div>
             <Button
-              variant="default"
+              variant="ghost"
               size="icon"
-              className="mt-1 h-9 w-9 shrink-0"
+              className="mt-1 h-9 w-9 shrink-0 rounded-full hover:bg-destructive/10 hover:text-destructive transition-colors"
               onClick={() => handleParagraphClick(paragraph)}
+              aria-label="Close translation"
             >
-              <Link2 className="h-4 w-4" />
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderWordTranslationBar = () => {
+    if (!isWordBarVisible && !wordTranslationResult && !wordTranslationError) {
+      return null
+    }
+
+    const currentWord = wordTranslationResult?.word ?? activeWord
+
+    return (
+      <div
+        className={cn(
+          "pointer-events-none fixed inset-x-0 bottom-0 z-40 transform-gpu transition-transform duration-300 ease-out",
+          isWordBarVisible ? "translate-y-0" : "translate-y-full",
+        )}
+        aria-live="polite"
+      >
+        <div className="pointer-events-auto w-full border-t border-border/60 bg-background/95 shadow-lg backdrop-blur">
+          <div className="flex items-center justify-between px-4 py-2 sm:px-6">
+            <div className="flex-1 space-y-1">
+              <button
+                type="button"
+                onClick={handleBarExpand}
+                className="w-full py-1.5 hover:bg-muted/30 transition-colors"
+              >
+                <div className="h-0.5 w-full bg-muted-foreground/30 rounded-full" />
+              </button>
+              <div className="text-center">
+                <p className="font-serif text-lg font-light text-primary">
+                  {currentWord ?? "Tap a word"}
+                </p>
+                {isWordTranslationLoading ? (
+                  <div className="flex items-center justify-center gap-2 mt-1">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
+                    <span className="text-lg font-light text-muted-foreground/90">Translating…</span>
+                  </div>
+                ) : wordTranslationResult?.translation ? (
+                  <p className="font-serif text-lg font-light text-muted-foreground/90 mt-1">
+                    {wordTranslationResult.translation}
+                  </p>
+                ) : null}
+                <div
+                  className={cn(
+                    "overflow-hidden transition-all duration-300 ease-out",
+                    isWordBarExpanded ? "max-h-32 opacity-100 mt-1" : "max-h-0 opacity-0",
+                  )}
+                >
+                  {isWordDefinitionLoading ? (
+                    <div className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
+                      <span className="text-lg font-light text-muted-foreground/90">Loading definition…</span>
+                    </div>
+                  ) : wordDefinitionError ? (
+                    <p className="text-xs font-medium text-destructive">{wordDefinitionError}</p>
+                  ) : wordDefinition ? (
+                    <p className="font-serif text-lg font-light text-muted-foreground/90">
+                      {wordDefinition}
+                    </p>
+                  ) : null}
+                </div>
+              </div>
+              {wordTranslationError && (
+                <p className="text-center text-xs font-medium text-destructive">{wordTranslationError}</p>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="ml-4 h-7 w-7 shrink-0 rounded-full hover:bg-destructive/10 hover:text-destructive"
+              onClick={closeWordBar}
+              aria-label="Close translation bar"
+            >
+              <X className="h-3 w-3" />
             </Button>
           </div>
         </div>
@@ -439,7 +622,7 @@ export default function LanguageReader({
       </header>
 
       <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-4xl space-y-6 px-6 py-8 pb-96">
+        <div className="mx-auto max-w-4xl space-y-6 px-6 py-8 pb-48">
           {paragraphs.map((paragraph) => {
             const hasTranslation = paragraph.spanish.trim().length > 0
             const isTranslationVisible = visibleTranslations.has(paragraph.id)
@@ -477,133 +660,7 @@ export default function LanguageReader({
         </div>
       </ScrollArea>
 
-      {selectedWord && (
-        <div className="fixed bottom-0 left-0 right-0 border-t bg-background shadow-2xl animate-in slide-in-from-bottom duration-300">
-          <Card className="rounded-none border-0 border-t">
-            <div className="flex items-center justify-between border-b px-6 py-5">
-              <div className="flex items-center gap-4">
-                <Button variant="outline" size="icon" className="h-11 w-11 rounded-full bg-transparent">
-                  <Plus className="h-5 w-5" />
-                </Button>
-                <h2 className="text-3xl font-light tracking-tight">{selectedWord.word}</h2>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-11 w-11 rounded-full hover:bg-destructive/10 hover:text-destructive"
-                onClick={() => setSelectedWord(null)}
-                aria-label="Close definition panel"
-              >
-                <X className="h-5 w-5" />
-              </Button>
-            </div>
-
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="flex w-full justify-start gap-8 rounded-none border-b bg-transparent px-6">
-                <TabsTrigger
-                  value="translation"
-                  className="rounded-none border-b-2 border-transparent px-0 py-4 font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-                >
-                  Translation
-                </TabsTrigger>
-                <TabsTrigger
-                  value="definitions"
-                  className="rounded-none border-b-2 border-transparent px-0 py-4 font-medium data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
-                >
-                  Definitions
-                </TabsTrigger>
-              </TabsList>
-
-              <ScrollArea className="h-[50vh]">
-                <TabsContent value="translation" className="mt-0 space-y-6 p-6">
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary" className="rounded-full px-4 py-1.5 text-xs font-medium">
-                      LdF 42
-                    </Badge>
-                    <Badge variant="secondary" className="rounded-full px-4 py-1.5 text-xs font-medium">
-                      Počet 60
-                    </Badge>
-                    <Badge variant="secondary" className="rounded-full px-4 py-1.5 text-xs font-medium">
-                      Naučené
-                    </Badge>
-                  </div>
-
-                  <div className="space-y-6">
-                    <div className="flex items-center justify-between rounded-lg border bg-accent/50 p-4">
-                      <h3 className="text-2xl font-light">{selectedWord.translations.main}</h3>
-                      <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 rounded-full">
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                    </div>
-
-                    {selectedWord.translations.alternatives.map((alternative, index) => (
-                      <Card key={`${alternative.word}-${index}`} className="border-border/50 p-4 hover:border-border">
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="flex-1 space-y-2">
-                            <div className="flex items-baseline gap-2">
-                              <span className="text-lg font-semibold">{alternative.word}</span>
-                              <Badge variant="outline" className="text-xs">
-                                {alternative.type}
-                              </Badge>
-                            </div>
-                            <p className="text-sm leading-relaxed text-muted-foreground">
-                              {alternative.meanings.join(", ")}
-                            </p>
-                          </div>
-                          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0 rounded-full">
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="definitions" className="mt-0 space-y-6 p-6">
-                  <Card className="border-border/50 bg-accent/30 p-5">
-                    <div className="space-y-4">
-                      <div className="flex items-baseline gap-2">
-                        <span className="text-xl font-semibold">{selectedWord.word}</span>
-                        <Badge variant="outline" className="text-xs">
-                          {selectedWord.type}
-                        </Badge>
-                      </div>
-                      <p className="text-base leading-relaxed">{selectedWord.definitions.spanish}</p>
-
-                      {selectedWord.definitions.related.length > 0 && (
-                        <>
-                          <Separator className="my-4" />
-                          <div className="flex flex-wrap gap-2">
-                            {selectedWord.definitions.related.map((word, index) => (
-                              <Badge key={`${word}-${index}`} variant="secondary" className="rounded-full px-3 py-1">
-                                {word}
-                              </Badge>
-                            ))}
-                          </div>
-                        </>
-                      )}
-
-                      {selectedWord.definitions.examples.length > 0 && (
-                        <>
-                          <Separator className="my-4" />
-                          <div className="space-y-2">
-                            <p className="text-sm font-medium text-muted-foreground">Examples:</p>
-                            {selectedWord.definitions.examples.map((example, index) => (
-                              <p key={`${example}-${index}`} className="border-l-2 pl-4 text-sm italic text-muted-foreground">
-                                {example}
-                              </p>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </Card>
-                </TabsContent>
-              </ScrollArea>
-            </Tabs>
-          </Card>
-        </div>
-      )}
+      {renderWordTranslationBar()}
     </div>
   )
 }

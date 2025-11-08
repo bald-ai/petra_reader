@@ -42,6 +42,12 @@ GOOGLE_CLOUD_PROJECT=gen-lang-client-0029722726
 
 For Netlify or other hosts, set both env vars (the project uses the `GOOGLE_CLOUD_PROJECT` name everywhere).
 
+## DeepL API key
+
+Single-word translations also hit the official DeepL API. Provide your auth token via the
+`DEEPL_TRANSLATOR` environment variable (set it both for Convex and for the Next.js runtime). The value
+is read directly by the Convex action that mixes the DeepL result with Google Translate.
+
 ## Convex Setup (manual steps)
 
 Convex uses CLI auth tied to your account. For fresh environments:
