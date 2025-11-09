@@ -1,7 +1,9 @@
 "use client";
 
-import { ChangeEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
+import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
+import { UserButton } from "@clerk/nextjs";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Trash2 } from "lucide-react";
@@ -17,6 +19,34 @@ const sortLabels: Record<SortOption, string> = {
 };
 
 export default function LibraryPage() {
+  return (
+    <>
+      <AuthLoading>
+        <div className="flex min-h-screen items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-foreground border-t-transparent" />
+        </div>
+      </AuthLoading>
+      <Unauthenticated>
+        <RedirectToLogin />
+      </Unauthenticated>
+      <Authenticated>
+        <LibraryContent />
+      </Authenticated>
+    </>
+  );
+}
+
+function RedirectToLogin() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.push("/login");
+  }, [router]);
+
+  return null;
+}
+
+function LibraryContent() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [sortBy, setSortBy] = useState<SortOption>("title");
@@ -144,6 +174,7 @@ export default function LibraryPage() {
           >
             {isUploading ? "Uploading…" : "Upload EPUB"}
           </button>
+          <UserButton />
           <input
             ref={fileInputRef}
             type="file"
