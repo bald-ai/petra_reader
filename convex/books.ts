@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
@@ -7,6 +8,51 @@ const sortByValidator = v.optional(
 );
 
 type SortBy = "title" | "recent";
+
+async function getCurrentUserOrCreate(ctx: MutationCtx) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) {
+    throw new Error("Unauthenticated");
+  }
+
+  let user = await ctx.db
+    .query("users")
+    .withIndex("by_token", (q) =>
+      q.eq("tokenIdentifier", identity.tokenIdentifier),
+    )
+    .unique();
+
+  if (!user) {
+    const userId = await ctx.db.insert("users", {
+      name: identity.name ?? "Unknown",
+      tokenIdentifier: identity.tokenIdentifier,
+      email: identity.email,
+      avatarUrl: identity.pictureUrl,
+    });
+    user = await ctx.db.get(userId);
+    if (!user) {
+      throw new Error("Failed to create user");
+    }
+  }
+
+  return user;
+}
+
+async function getCurrentUser(ctx: QueryCtx) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) {
+    return null;
+  }
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_token", (q) =>
+      q.eq("tokenIdentifier", identity.tokenIdentifier),
+    )
+    .unique();
+
+  return user;
+}
 
 export const generateUploadUrl = mutation({
   args: {},
@@ -23,6 +69,7 @@ export const create = mutation({
     author: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const user = await getCurrentUserOrCreate(ctx);
     const trimmedTitle = args.title?.trim() ?? "";
     const trimmedAuthor = args.author?.trim() ?? "";
     const { storageId, filename } = args;
@@ -44,6 +91,7 @@ export const create = mutation({
       coverUrl: null,
       createdAt: now,
       lastOpenedAt: null,
+      userId: user._id,
     });
 
     return bookId;
@@ -55,9 +103,14 @@ export const touchOpen = mutation({
     bookId: v.id("books"),
   },
   handler: async (ctx, { bookId }) => {
+    const user = await getCurrentUserOrCreate(ctx);
     const existing = await ctx.db.get(bookId);
     if (!existing) {
       throw new Error("Book not found.");
+    }
+
+    if (existing.userId !== user._id) {
+      throw new Error("Unauthorized");
     }
 
     await ctx.db.patch(bookId, { lastOpenedAt: Date.now() });
@@ -112,7 +165,14 @@ export const list = query({
     sortBy: sortByValidator,
   },
   handler: async (ctx, { sortBy }) => {
-    const books = await ctx.db.query("books").collect();
+    const user = await getCurrentUser(ctx);
+    if (!user) {
+      return [];
+    }
+    const books = await ctx.db
+      .query("books")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
     const sanitized = books
       .map(sanitizeBookForList)
       .filter((book): book is BookListItem => book !== null);
@@ -144,9 +204,16 @@ export const getFileUrl = query({
     bookId: v.id("books"),
   },
   handler: async (ctx, { bookId }) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) {
+      throw new Error("Unauthenticated");
+    }
     const book = await ctx.db.get(bookId);
     if (!book) {
       throw new Error("Book not found.");
+    }
+    if (book.userId !== user._id) {
+      throw new Error("Unauthorized");
     }
     if (!book.storageId) {
       throw new Error("This book is missing file storage. Please re-upload.");
@@ -164,9 +231,14 @@ export const remove = mutation({
     bookId: v.id("books"),
   },
   handler: async (ctx, { bookId }) => {
+    const user = await getCurrentUserOrCreate(ctx);
     const book = await ctx.db.get(bookId);
     if (!book) {
       throw new Error("Book not found.");
+    }
+
+    if (book.userId !== user._id) {
+      throw new Error("Unauthorized");
     }
 
     // Delete the book record from the database
@@ -191,9 +263,16 @@ export const get = query({
     bookId: v.id("books"),
   },
   handler: async (ctx, { bookId }) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) {
+      throw new Error("Unauthenticated");
+    }
     const book = await ctx.db.get(bookId);
     if (!book) {
       throw new Error("Book not found.");
+    }
+    if (book.userId !== user._id) {
+      throw new Error("Unauthorized");
     }
     return sanitizeBookDetails(book);
   },

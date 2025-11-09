@@ -11,6 +11,7 @@
 import type * as bookContent from "../bookContent.js";
 import type * as books from "../books.js";
 import type * as translations from "../translations.js";
+import type * as users from "../users.js";
 import type * as utils_epub from "../utils/epub.js";
 
 import type {
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   bookContent: typeof bookContent;
   books: typeof books;
   translations: typeof translations;
+  users: typeof users;
   "utils/epub": typeof utils_epub;
 }>;
 declare const fullApiWithMounts: typeof fullApi;
