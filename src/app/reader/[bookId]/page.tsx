@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback, startTransition } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -8,8 +8,10 @@ import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
 import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
 
-const INITIAL_CHUNKS = 5;
-const CHUNKS_PER_LOAD = 3;
+const INITIAL_CHUNKS = 15;
+const CHUNKS_PER_LOAD = 30;
+const PRELOAD_THRESHOLD = 10;
+const KEEP_WINDOW = 10;
 
 export default function ReaderPage() {
   const router = useRouter();
@@ -21,21 +23,32 @@ export default function ReaderPage() {
     bookId ? { bookId } : "skip",
   );
   const touchOpen = useMutation(api.books.touchOpen);
-  const [loadedChunks, setLoadedChunks] = useState<Set<number>>(new Set());
   const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
+  const [minChunkIndex, setMinChunkIndex] = useState<number>(0);
   const [maxChunkIndex, setMaxChunkIndex] = useState<number>(INITIAL_CHUNKS - 1);
+  const [isAtBottom, setIsAtBottom] = useState(false);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState<number>(0);
   const hasTouchedRef = useRef(false);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const paragraphToChunkMap = useRef<Map<number, number>>(new Map());
+  const hasScrolledRef = useRef(false);
 
   const chunks = useQuery(
     api.books.getChunks,
-    bookId ? { bookId, fromChunk: 0, toChunk: maxChunkIndex } : "skip",
+    bookId ? { bookId, fromChunk: minChunkIndex, toChunk: maxChunkIndex } : "skip",
   );
 
   useEffect(() => {
     hasTouchedRef.current = false;
-    setLoadedChunks(new Set());
-    setParagraphs([]);
-    setMaxChunkIndex(INITIAL_CHUNKS - 1);
+    hasScrolledRef.current = false;
+    paragraphToChunkMap.current.clear();
+    startTransition(() => {
+      setParagraphs([]);
+      setMinChunkIndex(0);
+      setMaxChunkIndex(INITIAL_CHUNKS - 1);
+      setIsAtBottom(false);
+      setCurrentChunkIndex(0);
+    });
   }, [bookId]);
 
   useEffect(() => {
@@ -43,12 +56,17 @@ export default function ReaderPage() {
       return;
     }
 
+    const loadedChunkSet = new Set(chunks.map(c => c.chunkIndex));
+    const previousChunkMap = new Map(paragraphToChunkMap.current);
+
     setParagraphs((prev) => {
       const existingIds = new Set(prev.map((p) => p.id));
       const newParagraphs: Paragraph[] = [];
+      const chunkMap = new Map<number, number>();
 
       for (const chunk of chunks) {
         for (const para of chunk.paragraphs) {
+          chunkMap.set(para.id, chunk.chunkIndex);
           if (existingIds.has(para.id)) {
             continue;
           }
@@ -62,22 +80,140 @@ export default function ReaderPage() {
         }
       }
 
-      if (newParagraphs.length === 0) {
+      paragraphToChunkMap.current = chunkMap;
+
+      const filtered = prev.filter(p => {
+        const chunkIdx = chunkMap.get(p.id) ?? previousChunkMap.get(p.id);
+        return chunkIdx !== undefined && loadedChunkSet.has(chunkIdx);
+      });
+
+      if (newParagraphs.length === 0 && filtered.length === prev.length) {
         return prev;
       }
 
-      const combined = [...prev, ...newParagraphs];
+      const combined = [...filtered, ...newParagraphs];
       return combined.sort((a, b) => a.id - b.id);
     });
 
-    setLoadedChunks((prev) => {
-      const updated = new Set(prev);
-      for (const chunk of chunks) {
-        updated.add(chunk.chunkIndex);
-      }
-      return updated;
-    });
   }, [chunks]);
+
+  const updateCurrentChunk = useCallback(() => {
+    const scrollArea = document.querySelector('[data-slot="scroll-area-viewport"]') as HTMLElement;
+    if (!scrollArea || paragraphs.length === 0) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = scrollArea;
+    const threshold = 50;
+    
+    if (scrollTop > 10) {
+      hasScrolledRef.current = true;
+    }
+    
+    const atBottom = scrollHeight - scrollTop - clientHeight < threshold;
+    
+    setIsAtBottom(atBottom);
+
+    const scrollRatio = Math.max(0, Math.min(1, scrollTop / Math.max(scrollHeight - clientHeight, 1)));
+    const estimatedIndex = Math.floor(scrollRatio * paragraphs.length);
+    const visibleParagraph = paragraphs[estimatedIndex];
+    
+    if (visibleParagraph) {
+      const chunkIndex = paragraphToChunkMap.current.get(visibleParagraph.id);
+      if (chunkIndex !== undefined) {
+        setCurrentChunkIndex((prev) => prev !== chunkIndex ? chunkIndex : prev);
+      }
+    }
+  }, [paragraphs]);
+
+  useEffect(() => {
+    if (processingStatus?.totalChunks === undefined) return;
+    if (!chunks || chunks.length === 0) return;
+    if (paragraphs.length === 0) return;
+
+    const totalChunks = processingStatus.totalChunks;
+    
+    const newMin = Math.max(0, currentChunkIndex - KEEP_WINDOW);
+    const newMax = Math.min(totalChunks - 1, currentChunkIndex + KEEP_WINDOW);
+
+    let shouldUpdateMin = false;
+    let shouldUpdateMax = false;
+    let newMinValue = minChunkIndex;
+    let newMaxValue = maxChunkIndex;
+
+    if (currentChunkIndex - minChunkIndex <= PRELOAD_THRESHOLD && minChunkIndex > 0) {
+      newMinValue = Math.max(0, minChunkIndex - CHUNKS_PER_LOAD);
+      if (newMinValue !== minChunkIndex) {
+        shouldUpdateMin = true;
+      }
+    }
+    
+    if (maxChunkIndex - currentChunkIndex <= PRELOAD_THRESHOLD && maxChunkIndex < totalChunks - 1) {
+      newMaxValue = Math.min(totalChunks - 1, maxChunkIndex + CHUNKS_PER_LOAD);
+      if (newMaxValue !== maxChunkIndex) {
+        shouldUpdateMax = true;
+      }
+    }
+
+    if (isAtBottom && maxChunkIndex < totalChunks - 1) {
+      newMaxValue = Math.min(totalChunks - 1, maxChunkIndex + CHUNKS_PER_LOAD);
+      if (newMaxValue !== maxChunkIndex) {
+        shouldUpdateMax = true;
+      }
+    }
+
+    if (hasScrolledRef.current) {
+      if (minChunkIndex < newMin && newMin !== minChunkIndex) {
+        newMinValue = newMin;
+        shouldUpdateMin = true;
+      }
+      if (maxChunkIndex > newMax && newMax !== maxChunkIndex) {
+        newMaxValue = newMax;
+        shouldUpdateMax = true;
+      }
+    }
+
+    if (shouldUpdateMin || shouldUpdateMax) {
+      startTransition(() => {
+        if (shouldUpdateMin) {
+          setMinChunkIndex(newMinValue);
+        }
+        if (shouldUpdateMax) {
+          setMaxChunkIndex(newMaxValue);
+        }
+      });
+    }
+  }, [currentChunkIndex, minChunkIndex, maxChunkIndex, processingStatus?.totalChunks, chunks, paragraphs.length, isAtBottom]);
+
+  useEffect(() => {
+    if (paragraphs.length === 0) return;
+    
+    const scrollArea = document.querySelector('[data-slot="scroll-area-viewport"]');
+    if (!scrollArea) return;
+
+    const handleScroll = () => {
+      updateCurrentChunk();
+      
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+      scrollTimeoutRef.current = setTimeout(() => {
+        updateCurrentChunk();
+      }, 100);
+    };
+
+    scrollArea.addEventListener('scroll', handleScroll, { passive: true });
+    
+    const timeoutId = setTimeout(() => {
+      updateCurrentChunk();
+    }, 200);
+
+    return () => {
+      scrollArea.removeEventListener('scroll', handleScroll);
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
+      clearTimeout(timeoutId);
+    };
+  }, [updateCurrentChunk, paragraphs.length]);
 
   useEffect(() => {
     if (!bookId || hasTouchedRef.current) {
@@ -92,15 +228,6 @@ export default function ReaderPage() {
     }
   }, [bookId, book, processingStatus, touchOpen]);
 
-  const handleLoadMore = () => {
-    if (processingStatus?.totalChunks !== undefined) {
-      const newMax = Math.min(
-        maxChunkIndex + CHUNKS_PER_LOAD,
-        processingStatus.totalChunks - 1,
-      );
-      setMaxChunkIndex(newMax);
-    }
-  };
 
   if (!bookId) {
     return (
@@ -176,10 +303,6 @@ export default function ReaderPage() {
     );
   }
 
-  const hasMoreChunks =
-    processingStatus?.totalChunks !== undefined &&
-    maxChunkIndex < processingStatus.totalChunks - 1;
-
   return (
     <>
       <LanguageReader
@@ -188,16 +311,6 @@ export default function ReaderPage() {
         paragraphs={paragraphs}
         onBack={() => router.push("/")}
       />
-      {hasMoreChunks && (
-        <div className="fixed bottom-20 left-0 right-0 z-30 flex justify-center">
-          <button
-            onClick={handleLoadMore}
-            className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-lg transition hover:bg-primary/90"
-          >
-            Load more
-          </button>
-        </div>
-      )}
     </>
   );
 }
