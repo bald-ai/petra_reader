@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
+import { api } from "./_generated/api";
 
 const sortByValidator = v.optional(
   v.union(v.literal("title"), v.literal("recent")),
@@ -92,7 +93,11 @@ export const create = mutation({
       createdAt: now,
       lastOpenedAt: null,
       userId: user._id,
+      processingStatus: "pending",
+      totalChunks: 0,
     });
+
+    ctx.scheduler.runAfter(0, api.bookContent.processBook, { bookId });
 
     return bookId;
   },
@@ -129,6 +134,8 @@ type BookListItem = {
 
 type BookDetails = BookListItem & {
   storageId: Id<"_storage"> | null;
+  processingStatus?: "pending" | "processing" | "completed" | "failed";
+  totalChunks?: number;
 };
 
 function sanitizeBookForList(book: Doc<"books">): BookListItem | null {
@@ -157,6 +164,8 @@ function sanitizeBookDetails(book: Doc<"books">): BookDetails {
     createdAt: book.createdAt,
     lastOpenedAt: book.lastOpenedAt ?? null,
     storageId: book.storageId ?? null,
+    processingStatus: book.processingStatus,
+    totalChunks: book.totalChunks,
   };
 }
 
@@ -196,6 +205,24 @@ export const list = query({
       }
       return a.createdAt - b.createdAt;
     });
+  },
+});
+
+export const listUnprocessed = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) {
+      return [];
+    }
+    const books = await ctx.db
+      .query("books")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .collect();
+    
+    return books.filter(
+      (book) => !book.processingStatus || book.processingStatus === "pending" || book.processingStatus === "failed",
+    );
   },
 });
 
@@ -241,15 +268,21 @@ export const remove = mutation({
       throw new Error("Unauthorized");
     }
 
-    // Delete the book record from the database
+    const chunks = await ctx.db
+      .query("bookChunks")
+      .withIndex("by_book", (q) => q.eq("bookId", bookId))
+      .collect();
+
+    for (const chunk of chunks) {
+      await ctx.db.delete(chunk._id);
+    }
+
     await ctx.db.delete(bookId);
 
-    // Optionally delete the file from storage if storageId exists
     if (book.storageId) {
       try {
         await ctx.storage.delete(book.storageId);
       } catch (error) {
-        // Log error but don't fail the deletion if storage deletion fails
         console.warn("Failed to delete book file from storage:", error);
       }
     }
@@ -275,5 +308,122 @@ export const get = query({
       throw new Error("Unauthorized");
     }
     return sanitizeBookDetails(book);
+  },
+});
+
+export const getInternal = query({
+  args: {
+    bookId: v.id("books"),
+  },
+  handler: async (ctx, { bookId }) => {
+    const book = await ctx.db.get(bookId);
+    if (!book) {
+      throw new Error("Book not found.");
+    }
+    return sanitizeBookDetails(book);
+  },
+});
+
+export const getProcessingStatus = query({
+  args: {
+    bookId: v.id("books"),
+  },
+  handler: async (ctx, { bookId }) => {
+    const user = await getCurrentUser(ctx);
+    if (!user) {
+      return null;
+    }
+    const book = await ctx.db.get(bookId);
+    if (!book || book.userId !== user._id) {
+      return null;
+    }
+    return {
+      processingStatus: book.processingStatus,
+      totalChunks: book.totalChunks,
+    };
+  },
+});
+
+export const updateProcessingStatus = mutation({
+  args: {
+    bookId: v.id("books"),
+    status: v.union(v.literal("pending"), v.literal("processing"), v.literal("completed"), v.literal("failed")),
+    totalChunks: v.optional(v.number()),
+  },
+  handler: async (ctx, { bookId, status, totalChunks }) => {
+    const update: { processingStatus: typeof status; totalChunks?: number } = {
+      processingStatus: status,
+    };
+    if (totalChunks !== undefined) {
+      update.totalChunks = totalChunks;
+    }
+    await ctx.db.patch(bookId, update);
+  },
+});
+
+export const insertChunks = mutation({
+  args: {
+    bookId: v.id("books"),
+    chunks: v.array(
+      v.object({
+        chunkIndex: v.number(),
+        paragraphs: v.array(
+          v.object({
+            id: v.number(),
+            text: v.string(),
+          }),
+        ),
+      }),
+    ),
+  },
+  handler: async (ctx, { bookId, chunks }) => {
+    for (const chunk of chunks) {
+      await ctx.db.insert("bookChunks", {
+        bookId,
+        chunkIndex: chunk.chunkIndex,
+        paragraphs: chunk.paragraphs,
+      });
+    }
+  },
+});
+
+export const getChunks = query({
+  args: {
+    bookId: v.id("books"),
+    fromChunk: v.number(),
+    toChunk: v.number(),
+  },
+  handler: async (ctx, { bookId, fromChunk, toChunk }) => {
+    const book = await ctx.db.get(bookId);
+    if (!book) {
+      return [];
+    }
+
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      return [];
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_token", (q) => q.eq("tokenIdentifier", identity.tokenIdentifier))
+      .unique();
+
+    if (!user || book.userId !== user._id) {
+      return [];
+    }
+
+    const chunks = await ctx.db
+      .query("bookChunks")
+      .withIndex("by_book", (q) => q.eq("bookId", bookId))
+      .collect();
+
+    return chunks
+      .filter((chunk) => chunk.chunkIndex >= fromChunk && chunk.chunkIndex <= toChunk)
+      .sort((a, b) => a.chunkIndex - b.chunkIndex)
+      .map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        paragraphs: chunk.paragraphs,
+      }));
   },
 });

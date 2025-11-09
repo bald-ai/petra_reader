@@ -17,8 +17,6 @@ type ExtractOptions = {
   maxParagraphs?: number;
 };
 
-const DEFAULT_MAX_PARAGRAPHS = 20;
-
 export async function extractParagraphsFromEpub(
   rawData: ArrayBuffer,
   options?: ExtractOptions,
@@ -27,7 +25,7 @@ export async function extractParagraphsFromEpub(
   // epub2 typings expect a path but the runtime also accepts a Buffer.
   const epub = await EPub.createAsync(buffer as unknown as string);
 
-  const maxParagraphs = options?.maxParagraphs ?? DEFAULT_MAX_PARAGRAPHS;
+  const maxParagraphs = options?.maxParagraphs;
   const paragraphs: ParsedParagraph[] = [];
 
   for (const entry of epub.flow ?? []) {
@@ -46,7 +44,7 @@ export async function extractParagraphsFromEpub(
         id: paragraphs.length + 1,
         text,
       });
-      if (paragraphs.length >= maxParagraphs) {
+      if (maxParagraphs !== undefined && paragraphs.length >= maxParagraphs) {
         return paragraphs;
       }
     }

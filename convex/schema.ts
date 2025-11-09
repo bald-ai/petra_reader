@@ -18,9 +18,21 @@ export default defineSchema({
     createdAt: v.number(),
     lastOpenedAt: v.optional(v.union(v.number(), v.null())),
     userId: v.id("users"),
+    processingStatus: v.optional(v.union(v.literal("pending"), v.literal("processing"), v.literal("completed"), v.literal("failed"))),
+    totalChunks: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_title", ["title"])
     .index("by_created_at", ["createdAt"])
     .index("by_last_opened_at", ["lastOpenedAt"]),
+  
+  bookChunks: defineTable({
+    bookId: v.id("books"),
+    chunkIndex: v.number(),
+    paragraphs: v.array(v.object({
+      id: v.number(),
+      text: v.string(),
+    })),
+  })
+    .index("by_book", ["bookId", "chunkIndex"]),
 });

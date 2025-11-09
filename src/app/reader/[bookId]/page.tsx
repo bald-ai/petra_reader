@@ -3,85 +3,104 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
 import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
+
+const INITIAL_CHUNKS = 5;
+const CHUNKS_PER_LOAD = 3;
 
 export default function ReaderPage() {
   const router = useRouter();
   const routeParams = useParams<{ bookId: string }>();
   const bookId = routeParams?.bookId as Id<"books"> | undefined;
   const book = useQuery(api.books.get, bookId ? { bookId } : "skip");
-  const fetchContent = useAction(api.bookContent.content);
+  const processingStatus = useQuery(
+    api.books.getProcessingStatus,
+    bookId ? { bookId } : "skip",
+  );
   const touchOpen = useMutation(api.books.touchOpen);
-  const [paragraphs, setParagraphs] = useState<Paragraph[] | null>(null);
-  const [isContentLoading, setIsContentLoading] = useState(false);
-  const [contentError, setContentError] = useState<string | null>(null);
+  const [loadedChunks, setLoadedChunks] = useState<Set<number>>(new Set());
+  const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
+  const [maxChunkIndex, setMaxChunkIndex] = useState<number>(INITIAL_CHUNKS - 1);
   const hasTouchedRef = useRef(false);
+
+  const chunks = useQuery(
+    api.books.getChunks,
+    bookId ? { bookId, fromChunk: 0, toChunk: maxChunkIndex } : "skip",
+  );
 
   useEffect(() => {
     hasTouchedRef.current = false;
+    setLoadedChunks(new Set());
+    setParagraphs([]);
+    setMaxChunkIndex(INITIAL_CHUNKS - 1);
   }, [bookId]);
 
   useEffect(() => {
-    if (!bookId) {
-      setParagraphs(null);
-      setContentError(null);
-      setIsContentLoading(false);
+    if (!chunks || chunks.length === 0) {
       return;
     }
 
-    let isCancelled = false;
-    setParagraphs(null);
-    setIsContentLoading(true);
-    setContentError(null);
+    setParagraphs((prev) => {
+      const existingIds = new Set(prev.map((p) => p.id));
+      const newParagraphs: Paragraph[] = [];
 
-    const loadContent = async () => {
-      try {
-        const result = await fetchContent({ bookId });
-        if (isCancelled) {
-          return;
-        }
-
-        const mapped: Paragraph[] = (result?.paragraphs ?? []).map((paragraph) => {
-          const fallback = defaultParagraphs.find((item) => item.id === paragraph.id);
-          return {
-            id: paragraph.id,
-            spanish: paragraph.text ?? fallback?.spanish ?? "",
+      for (const chunk of chunks) {
+        for (const para of chunk.paragraphs) {
+          if (existingIds.has(para.id)) {
+            continue;
+          }
+          existingIds.add(para.id);
+          const fallback = defaultParagraphs.find((item) => item.id === para.id);
+          newParagraphs.push({
+            id: para.id,
+            spanish: para.text ?? fallback?.spanish ?? "",
             english: fallback?.english ?? "",
-          };
-        });
-
-        setParagraphs(mapped);
-
-        if (!hasTouchedRef.current) {
-          touchOpen({ bookId }).catch((error) => {
-            console.error("Failed to record open event", error);
           });
-          hasTouchedRef.current = true;
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setContentError(
-            error instanceof Error
-              ? error.message
-              : "Failed to load book content.",
-          );
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsContentLoading(false);
         }
       }
-    };
 
-    void loadContent();
+      if (newParagraphs.length === 0) {
+        return prev;
+      }
 
-    return () => {
-      isCancelled = true;
-    };
-  }, [bookId, fetchContent, touchOpen]);
+      const combined = [...prev, ...newParagraphs];
+      return combined.sort((a, b) => a.id - b.id);
+    });
+
+    setLoadedChunks((prev) => {
+      const updated = new Set(prev);
+      for (const chunk of chunks) {
+        updated.add(chunk.chunkIndex);
+      }
+      return updated;
+    });
+  }, [chunks]);
+
+  useEffect(() => {
+    if (!bookId || hasTouchedRef.current) {
+      return;
+    }
+
+    if (book && processingStatus?.processingStatus === "completed") {
+      touchOpen({ bookId }).catch((error) => {
+        console.error("Failed to record open event", error);
+      });
+      hasTouchedRef.current = true;
+    }
+  }, [bookId, book, processingStatus, touchOpen]);
+
+  const handleLoadMore = () => {
+    if (processingStatus?.totalChunks !== undefined) {
+      const newMax = Math.min(
+        maxChunkIndex + CHUNKS_PER_LOAD,
+        processingStatus.totalChunks - 1,
+      );
+      setMaxChunkIndex(newMax);
+    }
+  };
 
   if (!bookId) {
     return (
@@ -110,25 +129,45 @@ export default function ReaderPage() {
     );
   }
 
-  if (contentError) {
+  if (processingStatus === undefined || book === undefined) {
     return (
       <ReaderFallback
-        title="Unable to load this book"
-        description={contentError}
+        title="Loading reader…"
+        description="Fetching book metadata and preparing the reader interface."
       />
     );
   }
 
-  if (isContentLoading || paragraphs === null) {
+  const status = processingStatus?.processingStatus;
+
+  if (status === undefined || status === null) {
     return (
       <ReaderFallback
-        title="Preparing book text…"
-        description="Extracting the paragraphs from the EPUB file."
+        title="Book needs processing"
+        description="This book was uploaded before the new system. Please re-upload it or wait for processing to complete."
       />
     );
   }
 
-  if (paragraphs.length === 0) {
+  if (status === "pending" || status === "processing") {
+    return (
+      <ReaderFallback
+        title="Processing book…"
+        description="Extracting paragraphs from the EPUB file. This may take a moment."
+      />
+    );
+  }
+
+  if (status === "failed") {
+    return (
+      <ReaderFallback
+        title="Unable to process this book"
+        description="Failed to extract content from the EPUB file. Please try re-uploading."
+      />
+    );
+  }
+
+  if (paragraphs.length === 0 && status === "completed") {
     return (
       <ReaderFallback
         title="No readable content found"
@@ -137,13 +176,29 @@ export default function ReaderPage() {
     );
   }
 
+  const hasMoreChunks =
+    processingStatus?.totalChunks !== undefined &&
+    maxChunkIndex < processingStatus.totalChunks - 1;
+
   return (
-    <LanguageReader
-      title={book.title}
-      subtitle={book.author?.trim() ?? null}
-      paragraphs={paragraphs}
-      onBack={() => router.push("/")}
-    />
+    <>
+      <LanguageReader
+        title={book.title}
+        subtitle={book.author?.trim() ?? null}
+        paragraphs={paragraphs}
+        onBack={() => router.push("/")}
+      />
+      {hasMoreChunks && (
+        <div className="fixed bottom-20 left-0 right-0 z-30 flex justify-center">
+          <button
+            onClick={handleLoadMore}
+            className="rounded-full bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground shadow-lg transition hover:bg-primary/90"
+          >
+            Load more
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
