@@ -1,11 +1,11 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo, useCallback, useEffect, useRef } from "react"
 import { useAction } from "convex/react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { ChevronLeft, HelpCircle, Link2, Loader2, MoreVertical, X } from "lucide-react"
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
 
 export interface Paragraph {
@@ -14,7 +14,7 @@ export interface Paragraph {
   english: string
 }
 
-interface WordDefinition {
+type WordDefinition = {
   word: string
   type: string
   translation: string
@@ -32,6 +32,9 @@ interface WordDefinition {
     }>
   }
 }
+
+const MAX_VISIBLE_TRANSLATIONS = 5
+const LOAD_MORE_THRESHOLD = 4
 
 export const defaultParagraphs: Paragraph[] = [
   {
@@ -244,6 +247,10 @@ type LanguageReaderProps = {
   title?: string
   subtitle?: string | null
   paragraphs?: Paragraph[]
+  hasMore?: boolean
+  isInitialLoading?: boolean
+  isLoadingMore?: boolean
+  onLoadMore?: () => void
   onBack?: () => void
 }
 
@@ -251,6 +258,10 @@ export default function LanguageReader({
   title,
   subtitle,
   paragraphs = defaultParagraphs,
+  hasMore = false,
+  isInitialLoading = false,
+  isLoadingMore = false,
+  onLoadMore,
   onBack,
 }: LanguageReaderProps) {
   const [visibleTranslations, setVisibleTranslations] = useState<Set<number>>(new Set())
@@ -270,10 +281,57 @@ export default function LanguageReader({
   const translateParagraphAction = useAction(api.translations.translateParagraph)
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
+  const scrollParentRef = useRef<HTMLDivElement | null>(null)
 
-  const hasVisibleTranslation = visibleTranslations.size > 0
+  const hasVisibleTranslation = useMemo(
+    () => visibleTranslations.size > 0,
+    [visibleTranslations]
+  )
 
-  const fetchWordTranslation = async (word: string) => {
+  const rowVirtualizer = useVirtualizer({
+    count: paragraphs.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: () => 200,
+    overscan: 8,
+  })
+
+  const virtualItems = rowVirtualizer.getVirtualItems()
+
+  useEffect(() => {
+    if (!hasMore || !onLoadMore || isLoadingMore) {
+      return
+    }
+    const lastItem = virtualItems[virtualItems.length - 1]
+    if (!lastItem) {
+      return
+    }
+    if (lastItem.index >= paragraphs.length - LOAD_MORE_THRESHOLD) {
+      onLoadMore()
+    }
+  }, [virtualItems, paragraphs.length, hasMore, onLoadMore, isLoadingMore])
+
+  const fetchWordDefinition = useCallback(async (word: string) => {
+    if (!word) {
+      return
+    }
+
+    setWordDefinitionError(null)
+    setIsWordDefinitionLoading(true)
+
+    try {
+      const result = await lookupWordDefinitionAction({ word })
+      setWordDefinition(result.definition)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to fetch definition right now."
+      setWordDefinitionError(message)
+      setWordDefinition(null)
+    } finally {
+      setIsWordDefinitionLoading(false)
+    }
+  }, [lookupWordDefinitionAction])
+
+  const fetchWordTranslation = useCallback(async (word: string) => {
     if (!word) {
       return
     }
@@ -315,9 +373,9 @@ export default function LanguageReader({
     } finally {
       setIsWordTranslationLoading(false)
     }
-  }
+  }, [wordTranslationsCache, wordDefinition, translateWordAction, fetchWordDefinition])
 
-  const ensureTranslation = async (paragraph: Paragraph) => {
+  const ensureTranslation = useCallback(async (paragraph: Paragraph) => {
     if (translations[paragraph.id] || translationErrors[paragraph.id] || loadingTranslations.has(paragraph.id)) {
       return
     }
@@ -355,26 +413,50 @@ export default function LanguageReader({
         return updated
       })
     }
-  }
+  }, [translations, translationErrors, loadingTranslations, translateParagraphAction])
 
-  const handleParagraphClick = (paragraph: Paragraph) => {
-    const wasVisible = visibleTranslations.has(paragraph.id)
+  const handleParagraphClick = useCallback((paragraph: Paragraph) => {
     setVisibleTranslations((prev) => {
       const updated = new Set(prev)
-      if (updated.has(paragraph.id)) {
-        updated.delete(paragraph.id)
-      } else {
-        updated.add(paragraph.id)
+
+      const dropTranslation = (id: number) => {
+        updated.delete(id)
+        setTranslations((prevTranslations) => {
+          const { [id]: _removed, ...rest } = prevTranslations
+          void _removed
+          return rest
+        })
+        setTranslationErrors((prevErrors) => {
+          const { [id]: _removed, ...rest } = prevErrors
+          void _removed
+          return rest
+        })
+        setLoadingTranslations((prevLoading) => {
+          const next = new Set(prevLoading)
+          next.delete(id)
+          return next
+        })
       }
+
+      if (updated.has(paragraph.id)) {
+        dropTranslation(paragraph.id)
+        return updated
+      }
+
+      if (updated.size >= MAX_VISIBLE_TRANSLATIONS) {
+        const oldest = updated.values().next().value
+        if (typeof oldest === "number") {
+          dropTranslation(oldest)
+        }
+      }
+
+      updated.add(paragraph.id)
+      void ensureTranslation(paragraph)
       return updated
     })
+  }, [ensureTranslation])
 
-    if (!wasVisible) {
-      void ensureTranslation(paragraph)
-    }
-  }
-
-  const handleWordClick = (word: string) => {
+  const handleWordClick = useCallback((word: string) => {
     const cleanWord = word.replace(/[.,;:!?"""¿¡]/g, "")
     if (!cleanWord) {
       return
@@ -386,28 +468,69 @@ export default function LanguageReader({
     setWordDefinition(null)
     setWordDefinitionError(null)
     void fetchWordTranslation(cleanWord)
-  }
+  }, [fetchWordTranslation])
 
-  const fetchWordDefinition = async (word: string) => {
-    if (!word) {
-      return
+  const extractWordFromClick = useCallback((event: React.MouseEvent<HTMLElement>, text: string) => {
+    // Get the text node and character offset at click position
+    const range = document.caretRangeFromPoint?.(event.clientX, event.clientY)
+    
+    if (!range) {
+      // Fallback: try to get selection
+      const selection = window.getSelection()
+      if (selection && selection.rangeCount > 0) {
+        const selRange = selection.getRangeAt(0)
+        if (selRange.startContainer.nodeType === Node.TEXT_NODE) {
+          const textNode = selRange.startContainer as Text
+          const offset = selRange.startOffset
+          const textContent = textNode.textContent || text
+          
+          // Find word boundaries around the offset
+          let start = offset
+          let end = offset
+          
+          // Move start backwards to word boundary (non-whitespace)
+          while (start > 0 && /\S/.test(textContent[start - 1])) {
+            start--
+          }
+          
+          // Move end forwards to word boundary
+          while (end < textContent.length && /\S/.test(textContent[end])) {
+            end++
+          }
+          
+          const word = textContent.slice(start, end).trim()
+          return word ? word.replace(/[.,;:!?"""¿¡]/g, "") : null
+        }
+      }
+      return null
     }
-
-    setWordDefinitionError(null)
-    setIsWordDefinitionLoading(true)
-
-    try {
-      const result = await lookupWordDefinitionAction({ word })
-      setWordDefinition(result.definition)
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to fetch definition right now."
-      setWordDefinitionError(message)
-      setWordDefinition(null)
-    } finally {
-      setIsWordDefinitionLoading(false)
+    
+    // Use range to find the character position
+    const textNode = range.startContainer
+    if (textNode.nodeType !== Node.TEXT_NODE) {
+      return null
     }
-  }
+    
+    const textContent = textNode.textContent || text
+    const offset = range.startOffset
+    
+    // Find word boundaries
+    let start = offset
+    let end = offset
+    
+    // Move start backwards to word boundary
+    while (start > 0 && /\S/.test(textContent[start - 1])) {
+      start--
+    }
+    
+    // Move end forwards to word boundary
+    while (end < textContent.length && /\S/.test(textContent[end])) {
+      end++
+    }
+    
+    const word = textContent.slice(start, end).trim()
+    return word ? word.replace(/[.,;:!?"""¿¡]/g, "") : null
+  }, [])
 
   const handleBarExpand = () => {
     setIsWordBarExpanded(!isWordBarExpanded)
@@ -423,52 +546,28 @@ export default function LanguageReader({
     setWordDefinitionError(null)
   }
 
-  const renderClickableText = (text: string, paragraphId: number) => {
-    const words = text.split(" ")
+  const renderClickableText = useCallback((paragraph: Paragraph) => {
+    const handleTextClick = (event: React.MouseEvent<HTMLElement>) => {
+      event.stopPropagation()
+      const word = extractWordFromClick(event, paragraph.spanish)
+      if (word) {
+        handleWordClick(word)
+      }
+    }
+
     return (
-      <span>
-        {words.map((word, index) => {
-          const cleanWord = word.replace(/[.,;:!?"“”¿¡]/g, "")
-          const punctuation = word.match(/[.,;:!?"“”¿¡]/g)?.join("") ?? ""
-          if (!cleanWord) {
-            return (
-              <span key={`${paragraphId}-${index}`}>
-                {word}{" "}
-              </span>
-            )
-          }
-
-          const hasDefinition = Boolean(sampleDefinitions[cleanWord])
-          const isActiveWord = activeWord?.toLowerCase() === cleanWord.toLowerCase()
-
-          return (
-            <span key={`${paragraphId}-${index}`}>
-              <button
-                type="button"
-                className={cn(
-                  "inline cursor-pointer rounded-sm bg-transparent px-0 text-left text-current underline-offset-4 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50",
-                  hasDefinition
-                    ? "underline decoration-primary/40 decoration-2 hover:text-primary hover:decoration-primary"
-                    : "hover:text-primary/80",
-                  isActiveWord && "bg-primary/10 text-primary",
-                )}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  handleWordClick(word)
-                }}
-              >
-                {cleanWord}
-              </button>
-              {punctuation}{" "}
-            </span>
-          )
-        })}
+      <span
+        onClick={handleTextClick}
+        className="cursor-pointer select-text"
+        style={{ userSelect: 'text' }}
+      >
+        {paragraph.spanish}
       </span>
     )
-  }
+  }, [handleWordClick, extractWordFromClick])
 
-  const renderTranslationView = (paragraph: Paragraph) => {
-    const spanishText = renderClickableText(paragraph.spanish, paragraph.id)
+  const renderTranslationView = useCallback((paragraph: Paragraph) => {
+    const spanishText = renderClickableText(paragraph)
     const translatedText = translations[paragraph.id]
     const translationError = translationErrors[paragraph.id]
     const isLoading = loadingTranslations.has(paragraph.id)
@@ -515,7 +614,8 @@ export default function LanguageReader({
         </div>
       </div>
     )
-  }
+  }, [renderClickableText, translations, translationErrors, loadingTranslations, handleParagraphClick])
+
 
   const renderWordTranslationBar = () => {
     if (!isWordBarVisible && !wordTranslationResult && !wordTranslationError) {
@@ -538,9 +638,10 @@ export default function LanguageReader({
               <button
                 type="button"
                 onClick={handleBarExpand}
-                className="w-full py-1.5 hover:bg-muted/30 transition-colors"
+                className="w-full py-2 hover:bg-muted/30 transition-colors rounded-md cursor-pointer"
+                aria-label={isWordBarExpanded ? "Collapse definition" : "Expand definition"}
               >
-                <div className="h-0.5 w-full bg-muted-foreground/30 rounded-full" />
+                <div className="h-0.5 w-12 mx-auto bg-muted-foreground/40 rounded-full" />
               </button>
               <div className="text-center">
                 <p className="font-serif text-lg font-light text-primary">
@@ -559,20 +660,23 @@ export default function LanguageReader({
                 <div
                   className={cn(
                     "overflow-hidden transition-all duration-300 ease-out",
-                    isWordBarExpanded ? "max-h-32 opacity-100 mt-1" : "max-h-0 opacity-0",
+                    isWordBarExpanded ? "max-h-96 opacity-100 mt-2" : "max-h-0 opacity-0",
                   )}
                 >
                   {isWordDefinitionLoading ? (
-                    <div className="flex items-center justify-center gap-2">
+                    <div className="flex items-center justify-center gap-2 py-2">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
-                      <span className="text-lg font-light text-muted-foreground/90">Loading definition…</span>
+                      <span className="text-sm font-light text-muted-foreground/90">Loading definition…</span>
                     </div>
                   ) : wordDefinitionError ? (
-                    <p className="text-xs font-medium text-destructive">{wordDefinitionError}</p>
+                    <p className="text-xs font-medium text-destructive py-2">{wordDefinitionError}</p>
                   ) : wordDefinition ? (
-                    <p className="font-serif text-lg font-light text-muted-foreground/90">
-                      {wordDefinition}
-                    </p>
+                    <div className="py-2">
+                      <p className="text-sm font-medium text-muted-foreground/70 mb-1">Definition:</p>
+                      <p className="font-serif text-base font-light text-muted-foreground/90 leading-relaxed">
+                        {wordDefinition}
+                      </p>
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -621,44 +725,82 @@ export default function LanguageReader({
         </div>
       </header>
 
-      <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-4xl space-y-6 px-6 py-8 pb-48">
-          {paragraphs.map((paragraph) => {
-            const hasTranslation = paragraph.spanish.trim().length > 0
-            const isTranslationVisible = visibleTranslations.has(paragraph.id)
-
-            return (
-              <div
-                key={paragraph.id}
-                className={`transition-all duration-300 ${
-                  hasVisibleTranslation && !isTranslationVisible ? "opacity-30 blur-[2px]" : "opacity-100 blur-0"
-                }`}
-              >
-                {isTranslationVisible && hasTranslation ? (
-                  renderTranslationView(paragraph)
-                ) : (
-                  <div className="group flex items-baseline gap-4">
-                    <p className="flex-1 font-serif text-lg leading-relaxed text-foreground">
-                      {renderClickableText(paragraph.spanish, paragraph.id)}
-                    </p>
-                    {hasTranslation && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75"
-                        onClick={() => handleParagraphClick(paragraph)}
-                        aria-label="Show translation"
-                      >
-                        <Link2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </div>
-                )}
+      <div ref={scrollParentRef} className="flex-1 overflow-auto">
+        {paragraphs.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-6">
+            {isInitialLoading ? (
+              <div className="inline-flex items-center gap-3 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                <span>Loading paragraphs…</span>
               </div>
-            )
-          })}
+            ) : (
+              <p className="text-sm text-muted-foreground">No readable paragraphs yet.</p>
+            )}
+          </div>
+        ) : (
+          <div
+            className="relative mx-auto max-w-4xl px-6 py-8 pb-48"
+            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          >
+            {virtualItems.map((virtualItem) => {
+              const paragraph = paragraphs[virtualItem.index]
+              if (!paragraph) {
+                return null
+              }
+              const hasTranslation = paragraph.spanish.trim().length > 0
+              const isTranslationVisible = visibleTranslations.has(paragraph.id)
+
+              return (
+                <div
+                  key={virtualItem.key}
+                  data-index={virtualItem.index}
+                  data-paragraph-id={paragraph.id}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                  className={cn(
+                    "pb-6 transition-opacity duration-300",
+                    hasVisibleTranslation && !isTranslationVisible ? "opacity-30" : "opacity-100"
+                  )}
+                >
+                  {isTranslationVisible && hasTranslation ? (
+                    renderTranslationView(paragraph)
+                  ) : (
+                    <div className="group flex items-baseline gap-4">
+                      <p className="flex-1 font-serif text-lg leading-relaxed text-foreground">
+                        {renderClickableText(paragraph)}
+                      </p>
+                      {hasTranslation && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75"
+                          onClick={() => handleParagraphClick(paragraph)}
+                          aria-label="Show translation"
+                        >
+                          <Link2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {isLoadingMore && (
+        <div className="flex items-center justify-center gap-2 bg-background/80 py-2 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading more paragraphs…
         </div>
-      </ScrollArea>
+      )}
 
       {renderWordTranslationBar()}
     </div>

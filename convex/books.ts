@@ -415,11 +415,12 @@ export const getChunks = query({
 
     const chunks = await ctx.db
       .query("bookChunks")
-      .withIndex("by_book", (q) => q.eq("bookId", bookId))
+      .withIndex("by_book", (q) =>
+        q.eq("bookId", bookId).gte("chunkIndex", fromChunk).lte("chunkIndex", toChunk),
+      )
       .collect();
 
     return chunks
-      .filter((chunk) => chunk.chunkIndex >= fromChunk && chunk.chunkIndex <= toChunk)
       .sort((a, b) => a.chunkIndex - b.chunkIndex)
       .map((chunk) => ({
         chunkIndex: chunk.chunkIndex,
