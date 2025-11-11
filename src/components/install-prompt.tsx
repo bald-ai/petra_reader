@@ -13,32 +13,33 @@ type InstallPromptProps = {
 
 export function InstallPrompt({ className }: InstallPromptProps) {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [canInstall, setCanInstall] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
 
   useEffect(() => {
+    const nav = navigator as Navigator & { standalone?: boolean };
+    const media = window.matchMedia("(display-mode: standalone)");
+    setIsStandalone(media.matches || nav.standalone || false);
+
     const handleBeforeInstallPrompt = (event: Event) => {
-      const nav = navigator as Navigator & { standalone?: boolean };
-      const media = window.matchMedia("(display-mode: standalone)");
-      if (media.matches || nav.standalone) {
-        return;
-      }
       event.preventDefault();
       setDeferredPrompt(event as BeforeInstallPromptEvent);
-      setCanInstall(true);
     };
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     return () => window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
   }, []);
 
-  if (!canInstall || !deferredPrompt) {
+  if (isStandalone) {
     return null;
   }
 
   const handleInstall = async () => {
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    setDeferredPrompt(null);
-    setCanInstall(false);
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      setDeferredPrompt(null);
+    } else {
+      alert("To install: Tap the menu (⋮) → 'Install app' or 'Add to Home screen'");
+    }
   };
 
   return (
