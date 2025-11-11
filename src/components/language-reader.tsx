@@ -7,6 +7,7 @@ import { ChevronLeft, HelpCircle, Link2, Loader2, MoreVertical, X } from "lucide
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { useOnline } from "@/hooks/use-online"
 
 export interface Paragraph {
   id: number
@@ -293,6 +294,7 @@ export default function LanguageReader({
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
   const scrollParentRef = useRef<HTMLDivElement | null>(null)
+  const online = useOnline()
 
   const hasVisibleTranslation = useMemo(
     () => visibleTranslations.size > 0,
@@ -394,6 +396,12 @@ export default function LanguageReader({
       return
     }
 
+    if (!online) {
+      setWordDefinitionError("Offline — definitions resume when you reconnect.")
+      setIsWordDefinitionLoading(false)
+      return
+    }
+
     wordDefinitionRequestIdRef.current += 1
     const requestId = wordDefinitionRequestIdRef.current
 
@@ -419,7 +427,7 @@ export default function LanguageReader({
         setIsWordDefinitionLoading(false)
       }
     }
-  }, [lookupWordDefinitionAction])
+  }, [lookupWordDefinitionAction, online])
 
   const fetchWordTranslation = useCallback(async (word: string) => {
     if (!word) {
@@ -443,6 +451,15 @@ export default function LanguageReader({
         if (!wordDefinition) {
           void fetchWordDefinition(word)
         }
+      }
+      return
+    }
+
+    if (!online) {
+      if (isMountedRef.current && wordTranslationRequestIdRef.current === requestId) {
+        setWordTranslationResult(null)
+        setIsWordTranslationLoading(false)
+        setWordTranslationError("Offline — word lookups resume when you reconnect.")
       }
       return
     }
@@ -483,7 +500,7 @@ export default function LanguageReader({
         setIsWordTranslationLoading(false)
       }
     }
-  }, [wordDefinition, translateWordAction, fetchWordDefinition])
+  }, [wordDefinition, translateWordAction, fetchWordDefinition, online])
 
   const ensureTranslation = useCallback(async (paragraph: Paragraph) => {
     if (
@@ -492,6 +509,14 @@ export default function LanguageReader({
       translationErrors[paragraph.id] ||
       loadingTranslations.has(paragraph.id)
     ) {
+      return
+    }
+
+    if (!online) {
+      setTranslationErrors((prev) => ({
+        ...prev,
+        [paragraph.id]: "Offline — translations resume when you reconnect.",
+      }))
       return
     }
 
@@ -540,7 +565,7 @@ export default function LanguageReader({
         })
       }
     }
-  }, [translations, translationErrors, loadingTranslations, translateParagraphAction])
+  }, [translations, translationErrors, loadingTranslations, translateParagraphAction, online])
 
   const handleParagraphClick = useCallback((paragraph: Paragraph) => {
     if (paragraph.isPlaceholder) {
@@ -694,16 +719,18 @@ export default function LanguageReader({
       }
     }
 
+    const lookupHint = online ? undefined : "Offline — word lookups resume when you reconnect."
     return (
       <span
         onClick={handleTextClick}
         className="cursor-pointer select-text"
+        title={lookupHint}
         style={{ userSelect: 'text' }}
       >
         {paragraph.spanish}
       </span>
     )
-  }, [handleWordClick, extractWordFromClick])
+  }, [handleWordClick, extractWordFromClick, online])
 
   const renderTranslationView = useCallback((paragraph: Paragraph) => {
     if (paragraph.isPlaceholder) {
@@ -900,6 +927,11 @@ export default function LanguageReader({
               const isPlaceholder = paragraph.isPlaceholder === true
               const hasTranslation = !isPlaceholder && paragraph.spanish.trim().length > 0
               const isTranslationVisible = visibleTranslations.has(paragraph.id)
+              const hasCachedTranslation = Boolean(translations[paragraph.id])
+              const disableTranslationToggle = !online && !hasCachedTranslation
+              const translationButtonTitle = disableTranslationToggle
+                ? "Reconnect to translate this paragraph."
+                : "Show translation"
 
               return (
                 <div
@@ -933,6 +965,8 @@ export default function LanguageReader({
                           className="h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75"
                           onClick={() => handleParagraphClick(paragraph)}
                           aria-label="Show translation"
+                          title={translationButtonTitle}
+                          disabled={disableTranslationToggle}
                         >
                           <Link2 className="h-4 w-4" />
                         </Button>

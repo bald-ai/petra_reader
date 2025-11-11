@@ -10,6 +10,7 @@ import { Trash2 } from "lucide-react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { formatFileSize } from "@/lib/format";
+import { InstallPrompt } from "@/components/install-prompt";
 
 type SortOption = "title" | "recent";
 
@@ -22,7 +23,7 @@ export default function LibraryPage() {
   return (
     <>
       <AuthLoading>
-        <div className="flex min-h-screen items-center justify-center">
+        <div className="flex min-h-screen items-center justify-center" suppressHydrationWarning>
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-foreground border-t-transparent" />
         </div>
       </AuthLoading>
@@ -174,6 +175,7 @@ function LibraryContent() {
           >
             {isUploading ? "Uploading…" : "Upload EPUB"}
           </button>
+          <InstallPrompt className="rounded-full border border-foreground px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-foreground hover:text-background" />
           <UserButton />
           <input
             ref={fileInputRef}

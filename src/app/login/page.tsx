@@ -21,7 +21,7 @@ export default function LoginPage() {
         </div>
 
         <AuthLoading>
-          <div className="flex items-center justify-center py-8">
+          <div className="flex items-center justify-center py-8" suppressHydrationWarning>
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-foreground border-t-transparent" />
           </div>
         </AuthLoading>

@@ -7,6 +7,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
 import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
+import { useOnline } from "@/hooks/use-online";
 
 type ChunkRecord = {
   chunkIndex: number;
@@ -68,6 +69,8 @@ export default function ReaderPage() {
   const hasTouchedRef = useRef(false);
   const previousBookIdRef = useRef<Id<"books"> | undefined>(bookId);
   const savePositionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const online = useOnline();
+  const pendingProgressKey = bookId ? `petra:pendingProgress:${bookId}` : null;
 
   const status = processingStatus?.processingStatus ?? null;
   const totalChunks = processingStatus?.totalChunks ?? 0;
@@ -96,6 +99,78 @@ export default function ReaderPage() {
   const chunkBatch = useQuery(api.books.getChunks, chunkRequestArgs);
 
   const isRequestingChunks = chunkRequestRange !== null;
+
+  const queueReadingPosition = useCallback(
+    (paragraphId: number) => {
+      if (!pendingProgressKey || typeof window === "undefined") {
+        return;
+      }
+      try {
+        localStorage.setItem(
+          pendingProgressKey,
+          JSON.stringify({ paragraphId, ts: Date.now() }),
+        );
+      } catch (error) {
+        console.error("Failed to queue reading position", error);
+      }
+    },
+    [pendingProgressKey],
+  );
+
+  const persistReadingPosition = useCallback(
+    async (paragraphId: number) => {
+      if (!bookId) {
+        return;
+      }
+      if (!online) {
+        queueReadingPosition(paragraphId);
+        return;
+      }
+      try {
+        await saveReadingPosition({ bookId, paragraphId });
+        if (typeof window !== "undefined" && pendingProgressKey) {
+          try {
+            localStorage.removeItem(pendingProgressKey);
+          } catch (error) {
+            console.error("Failed to clear queued reading position", error);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to save reading position", error);
+        queueReadingPosition(paragraphId);
+      }
+    },
+    [bookId, online, pendingProgressKey, queueReadingPosition, saveReadingPosition],
+  );
+
+  const flushQueuedProgress = useCallback(async () => {
+    if (!bookId || !pendingProgressKey || typeof window === "undefined" || !online) {
+      return;
+    }
+    const raw = localStorage.getItem(pendingProgressKey);
+    if (!raw) {
+      return;
+    }
+    try {
+      const payload = JSON.parse(raw) as { paragraphId?: number };
+      if (typeof payload?.paragraphId !== "number") {
+        try {
+          localStorage.removeItem(pendingProgressKey);
+        } catch (removeError) {
+          console.error("Failed to clear invalid queued reading position", removeError);
+        }
+        return;
+      }
+      await saveReadingPosition({ bookId, paragraphId: payload.paragraphId });
+      try {
+        localStorage.removeItem(pendingProgressKey);
+      } catch (removeError) {
+        console.error("Failed to clear queued reading position", removeError);
+      }
+    } catch (error) {
+      console.error("Failed to flush reading position", error);
+    }
+  }, [bookId, online, pendingProgressKey, saveReadingPosition]);
 
   const scheduleChunkFetch = useCallback(
     (from: number, to: number) => {
@@ -221,14 +296,12 @@ export default function ReaderPage() {
             clearTimeout(savePositionTimeoutRef.current);
           }
           savePositionTimeoutRef.current = setTimeout(() => {
-            saveReadingPosition({ bookId, paragraphId: firstVisibleParagraph.id }).catch((error) => {
-              console.error("Failed to save reading position", error);
-            });
+            void persistReadingPosition(firstVisibleParagraph.id);
           }, 1000);
         }
       }
     },
-    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow, bookId, paragraphs, saveReadingPosition],
+    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow, bookId, paragraphs, persistReadingPosition],
   );
   const resetLoadedData = useCallback(() => {
     chunkMetadataRef.current.clear();
@@ -417,9 +490,13 @@ export default function ReaderPage() {
     };
   }, [bookId]);
 
+  useEffect(() => {
+    void flushQueuedProgress();
+  }, [flushQueuedProgress]);
+
 
   useEffect(() => {
-    if (!bookId || hasTouchedRef.current) {
+    if (!bookId || hasTouchedRef.current || !online) {
       return;
     }
 
@@ -429,7 +506,7 @@ export default function ReaderPage() {
       });
       hasTouchedRef.current = true;
     }
-  }, [bookId, book, processingStatus, touchOpen]);
+  }, [bookId, book, processingStatus, touchOpen, online]);
 
 
   if (!bookId) {
