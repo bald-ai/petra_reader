@@ -955,6 +955,12 @@ export default function LanguageReader({
                     renderTranslationView(paragraph)
                   ) : (
                     <div className="group flex items-baseline gap-4">
+                      {hasTranslation && (
+                        <div
+                          className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0"
+                          aria-hidden="true"
+                        />
+                      )}
                       <p className="flex-1 font-serif text-lg leading-relaxed text-foreground">
                         {renderClickableText(paragraph)}
                       </p>

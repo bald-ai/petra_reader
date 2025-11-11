@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 
 export function useOnline(defaultValue = true) {
-  const [online, setOnline] = useState(
-    typeof navigator === "undefined" ? defaultValue : navigator.onLine,
-  );
+  const [online, setOnline] = useState(defaultValue);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
+    setOnline(navigator.onLine);
+    
     const handleOnline = () => setOnline(true);
     const handleOffline = () => setOnline(false);
     window.addEventListener("online", handleOnline);
@@ -17,6 +19,10 @@ export function useOnline(defaultValue = true) {
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
+
+  if (!mounted) {
+    return defaultValue;
+  }
 
   return online;
 }

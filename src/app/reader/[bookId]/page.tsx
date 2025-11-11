@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, startTransition } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
 import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
@@ -86,6 +86,9 @@ export default function ReaderPage() {
   const lastRequestedRangeRef = useRef<{ from: number; to: number } | null>(null);
   const visibleRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
   const desiredChunkWindowRef = useRef<{ startChunk: number; endChunk: number } | null>(null);
+  const translationsWarmedUpRef = useRef(false);
+  const warmupTranslateWord = useAction(api.translations.translateWord);
+  const warmupLookupDefinition = useAction(api.translations.lookupWordDefinition);
 
   const chunkRequestArgs =
     bookId && chunkRequestRange
@@ -99,6 +102,37 @@ export default function ReaderPage() {
   const chunkBatch = useQuery(api.books.getChunks, chunkRequestArgs);
 
   const isRequestingChunks = chunkRequestRange !== null;
+
+  useEffect(() => {
+    if (translationsWarmedUpRef.current || !online) {
+      return;
+    }
+    translationsWarmedUpRef.current = true;
+    const warmUpApis = async () => {
+      try {
+        const results = await Promise.allSettled([
+          warmupTranslateWord({ word: "hola" }),
+          warmupLookupDefinition({ word: "hola" }),
+        ]);
+        
+        console.log("🔥 [WARM-UP] Translation API warm-up results:");
+        if (results[0].status === "fulfilled") {
+          console.log("  ✅ translateWord('hola'):", results[0].value);
+        } else {
+          console.log("  ❌ translateWord('hola') failed:", results[0].reason);
+        }
+        
+        if (results[1].status === "fulfilled") {
+          console.log("  ✅ lookupWordDefinition('hola'):", results[1].value);
+        } else {
+          console.log("  ❌ lookupWordDefinition('hola') failed:", results[1].reason);
+        }
+      } catch (error) {
+        console.warn("🔥 [WARM-UP] Warm-up requests failed", error);
+      }
+    };
+    void warmUpApis();
+  }, [online, warmupLookupDefinition, warmupTranslateWord]);
 
   const queueReadingPosition = useCallback(
     (paragraphId: number) => {
@@ -501,9 +535,13 @@ export default function ReaderPage() {
     }
 
     if (book && processingStatus?.processingStatus === "completed") {
-      touchOpen({ bookId }).catch((error) => {
-        console.error("Failed to record open event", error);
-      });
+      touchOpen({ bookId })
+        .then((result) => {
+          console.log("📖 [BOOK OPEN] touchOpen result:", result);
+        })
+        .catch((error) => {
+          console.error("📖 [BOOK OPEN] Failed to record open event:", error);
+        });
       hasTouchedRef.current = true;
     }
   }, [bookId, book, processingStatus, touchOpen, online]);
