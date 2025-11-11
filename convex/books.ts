@@ -122,6 +122,26 @@ export const touchOpen = mutation({
   },
 });
 
+export const saveReadingPosition = mutation({
+  args: {
+    bookId: v.id("books"),
+    paragraphId: v.number(),
+  },
+  handler: async (ctx, { bookId, paragraphId }) => {
+    const user = await getCurrentUserOrCreate(ctx);
+    const existing = await ctx.db.get(bookId);
+    if (!existing) {
+      throw new Error("Book not found.");
+    }
+
+    if (existing.userId !== user._id) {
+      throw new Error("Unauthorized");
+    }
+
+    await ctx.db.patch(bookId, { lastReadParagraphId: paragraphId });
+  },
+});
+
 type BookListItem = {
   _id: Id<"books">;
   title: string;
@@ -136,6 +156,7 @@ type BookDetails = BookListItem & {
   storageId: Id<"_storage"> | null;
   processingStatus?: "pending" | "processing" | "completed" | "failed";
   totalChunks?: number;
+  lastReadParagraphId?: number | null;
 };
 
 function sanitizeBookForList(book: Doc<"books">): BookListItem | null {
@@ -166,6 +187,7 @@ function sanitizeBookDetails(book: Doc<"books">): BookDetails {
     storageId: book.storageId ?? null,
     processingStatus: book.processingStatus,
     totalChunks: book.totalChunks,
+    lastReadParagraphId: book.lastReadParagraphId ?? null,
   };
 }
 

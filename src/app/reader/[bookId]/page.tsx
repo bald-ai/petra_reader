@@ -64,8 +64,10 @@ export default function ReaderPage() {
     bookId ? { bookId } : "skip",
   );
   const touchOpen = useMutation(api.books.touchOpen);
+  const saveReadingPosition = useMutation(api.books.saveReadingPosition);
   const hasTouchedRef = useRef(false);
   const previousBookIdRef = useRef<Id<"books"> | undefined>(bookId);
+  const savePositionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const status = processingStatus?.processingStatus ?? null;
   const totalChunks = processingStatus?.totalChunks ?? 0;
@@ -210,8 +212,23 @@ export default function ReaderPage() {
       desiredChunkWindowRef.current = windowRange;
       pruneChunksOutsideWindow(windowRange);
       ensureChunksForWindow(windowRange);
+
+      // Debounced save reading position
+      if (bookId && paragraphs.length > 0 && range.startIndex >= 0) {
+        const firstVisibleParagraph = paragraphs[range.startIndex];
+        if (firstVisibleParagraph && !firstVisibleParagraph.isPlaceholder && firstVisibleParagraph.id > 0) {
+          if (savePositionTimeoutRef.current) {
+            clearTimeout(savePositionTimeoutRef.current);
+          }
+          savePositionTimeoutRef.current = setTimeout(() => {
+            saveReadingPosition({ bookId, paragraphId: firstVisibleParagraph.id }).catch((error) => {
+              console.error("Failed to save reading position", error);
+            });
+          }, 1000);
+        }
+      }
     },
-    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow],
+    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow, bookId, paragraphs, saveReadingPosition],
   );
   const resetLoadedData = useCallback(() => {
     chunkMetadataRef.current.clear();
@@ -223,6 +240,10 @@ export default function ReaderPage() {
     highestLoadedChunkIndexRef.current = -1;
     setHighestLoadedChunkIndex(-1);
     chunkRequestInFlightRef.current = false;
+    if (savePositionTimeoutRef.current) {
+      clearTimeout(savePositionTimeoutRef.current);
+      savePositionTimeoutRef.current = null;
+    }
     setChunkRequestRange((prev) => (prev === null ? prev : null));
     setParagraphs((prev) => (prev.length > 0 ? [] : prev));
   }, []);
@@ -239,7 +260,21 @@ export default function ReaderPage() {
 
     if (status === "completed" && totalChunks > 0) {
       startTransition(() => {
-        scheduleChunkFetch(0, Math.min(totalChunks - 1, CHUNK_BATCH_SIZE - 1));
+        // Check if there's a saved reading position
+        const savedParagraphId = book?.lastReadParagraphId;
+        if (savedParagraphId && savedParagraphId > 0) {
+          // Calculate which chunk contains the saved paragraph
+          // Paragraph IDs are sequential, so we can estimate the chunk
+          const estimatedChunkIndex = Math.floor(savedParagraphId / CHUNK_SIZE);
+          const targetChunk = Math.max(0, Math.min(estimatedChunkIndex, totalChunks - 1));
+          // Load the target chunk and surrounding chunks
+          const startChunk = Math.max(0, targetChunk - CHUNK_WINDOW_PADDING);
+          const endChunk = Math.min(totalChunks - 1, targetChunk + CHUNK_WINDOW_PADDING);
+          scheduleChunkFetch(startChunk, endChunk);
+        } else {
+          // Default: load from beginning
+          scheduleChunkFetch(0, Math.min(totalChunks - 1, CHUNK_BATCH_SIZE - 1));
+        }
       });
     } else {
       startTransition(() => {
@@ -247,7 +282,7 @@ export default function ReaderPage() {
         resetLoadedData();
       });
     }
-  }, [bookId, resetLoadedData, scheduleChunkFetch, status, totalChunks]);
+  }, [bookId, resetLoadedData, scheduleChunkFetch, status, totalChunks, book]);
 
   useEffect(() => {
     if (!chunkRequestRange) {
@@ -374,6 +409,12 @@ export default function ReaderPage() {
 
   useEffect(() => {
     hasTouchedRef.current = false;
+    return () => {
+      if (savePositionTimeoutRef.current) {
+        clearTimeout(savePositionTimeoutRef.current);
+        savePositionTimeoutRef.current = null;
+      }
+    };
   }, [bookId]);
 
 
@@ -484,6 +525,7 @@ export default function ReaderPage() {
         onLoadMore={hasMoreChunks ? requestMoreChunks : undefined}
         onVisibleRangeChange={handleVisibleRangeChange}
         onBack={() => router.push("/")}
+        initialScrollToParagraphId={book.lastReadParagraphId ?? null}
       />
     </>
   );

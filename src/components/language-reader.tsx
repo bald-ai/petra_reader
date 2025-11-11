@@ -255,6 +255,7 @@ type LanguageReaderProps = {
   onLoadMore?: () => void
   onBack?: () => void
   onVisibleRangeChange?: (range: { startIndex: number; endIndex: number }) => void
+  initialScrollToParagraphId?: number | null
 }
 
 export default function LanguageReader({
@@ -267,6 +268,7 @@ export default function LanguageReader({
   onLoadMore,
   onBack,
   onVisibleRangeChange,
+  initialScrollToParagraphId,
 }: LanguageReaderProps) {
   const [visibleTranslations, setVisibleTranslations] = useState<Set<number>>(new Set())
   const [translations, setTranslations] = useState<Record<number, string>>({})
@@ -346,6 +348,46 @@ export default function LanguageReader({
       onVisibleRangeChange(nextRange)
     }
   }, [virtualItems, onVisibleRangeChange])
+
+  const hasScrolledToInitialRef = useRef(false)
+  const initialScrollToParagraphIdRef = useRef<number | null>(null)
+  
+  // Track the initial scroll target - only set once when prop first becomes available
+  useEffect(() => {
+    if (initialScrollToParagraphId && !initialScrollToParagraphIdRef.current) {
+      initialScrollToParagraphIdRef.current = initialScrollToParagraphId
+    }
+  }, [initialScrollToParagraphId])
+  
+  useEffect(() => {
+    const targetParagraphId = initialScrollToParagraphIdRef.current
+    if (!targetParagraphId || hasScrolledToInitialRef.current || paragraphs.length === 0 || isInitialLoading) {
+      return
+    }
+    
+    // Find the index of the paragraph with the matching ID
+    const targetIndex = paragraphs.findIndex((p) => p.id === targetParagraphId && !p.isPlaceholder)
+    if (targetIndex >= 0) {
+      hasScrolledToInitialRef.current = true
+      // Use multiple requestAnimationFrame calls to ensure the virtualizer has fully rendered and measured
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            try {
+              rowVirtualizer.scrollToIndex(targetIndex, {
+                align: "start",
+                behavior: "auto",
+              })
+            } catch (error) {
+              console.warn("Failed to scroll to initial position:", error)
+            }
+          }, 100)
+        })
+      })
+    }
+    // Don't mark as attempted if paragraph not found yet - it might still be loading
+    // Only mark as attempted if we've waited a reasonable amount and still can't find it
+  }, [paragraphs, isInitialLoading, rowVirtualizer])
 
   const fetchWordDefinition = useCallback(async (word: string) => {
     if (!word) {
@@ -904,12 +946,6 @@ export default function LanguageReader({
         )}
       </div>
 
-      {isLoadingMore && (
-        <div className="flex items-center justify-center gap-2 bg-background/80 py-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Loading more paragraphs…
-        </div>
-      )}
 
       {renderWordTranslationBar()}
     </div>
