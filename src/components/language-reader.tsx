@@ -12,6 +12,7 @@ export interface Paragraph {
   id: number
   spanish: string
   english: string
+  isPlaceholder?: boolean
 }
 
 type WordDefinition = {
@@ -35,6 +36,7 @@ type WordDefinition = {
 
 const MAX_VISIBLE_TRANSLATIONS = 5
 const LOAD_MORE_THRESHOLD = 4
+const MAX_WORD_TRANSLATION_CACHE_SIZE = 100
 
 export const defaultParagraphs: Paragraph[] = [
   {
@@ -252,6 +254,7 @@ type LanguageReaderProps = {
   isLoadingMore?: boolean
   onLoadMore?: () => void
   onBack?: () => void
+  onVisibleRangeChange?: (range: { startIndex: number; endIndex: number }) => void
 }
 
 export default function LanguageReader({
@@ -263,6 +266,7 @@ export default function LanguageReader({
   isLoadingMore = false,
   onLoadMore,
   onBack,
+  onVisibleRangeChange,
 }: LanguageReaderProps) {
   const [visibleTranslations, setVisibleTranslations] = useState<Set<number>>(new Set())
   const [translations, setTranslations] = useState<Record<number, string>>({})
@@ -277,7 +281,12 @@ export default function LanguageReader({
   const [wordDefinition, setWordDefinition] = useState<string | null>(null)
   const [isWordDefinitionLoading, setIsWordDefinitionLoading] = useState(false)
   const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
-  const [wordTranslationsCache, setWordTranslationsCache] = useState<Record<string, WordTranslationResult>>({})
+  const wordTranslationsCacheRef = useRef<Map<string, WordTranslationResult>>(new Map())
+  const wordTranslationRequestIdRef = useRef(0)
+  const wordDefinitionRequestIdRef = useRef(0)
+  const paragraphTranslationRequestIdsRef = useRef(new Map<number, number>())
+  const isMountedRef = useRef(true)
+  const visibleRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null)
   const translateParagraphAction = useAction(api.translations.translateParagraph)
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
@@ -298,6 +307,17 @@ export default function LanguageReader({
   const virtualItems = rowVirtualizer.getVirtualItems()
 
   useEffect(() => {
+    isMountedRef.current = true
+    const cacheRef = wordTranslationsCacheRef.current
+    const paragraphRequestMap = paragraphTranslationRequestIdsRef.current
+    return () => {
+      isMountedRef.current = false
+      cacheRef.clear()
+      paragraphRequestMap.clear()
+    }
+  }, [])
+
+  useEffect(() => {
     if (!hasMore || !onLoadMore || isLoadingMore) {
       return
     }
@@ -310,24 +330,52 @@ export default function LanguageReader({
     }
   }, [virtualItems, paragraphs.length, hasMore, onLoadMore, isLoadingMore])
 
+  useEffect(() => {
+    if (!onVisibleRangeChange || virtualItems.length === 0) {
+      return
+    }
+    const first = virtualItems[0]
+    const last = virtualItems[virtualItems.length - 1]
+    if (!first || !last) {
+      return
+    }
+    const nextRange = { startIndex: first.index, endIndex: last.index }
+    const prev = visibleRangeRef.current
+    if (!prev || prev.startIndex !== nextRange.startIndex || prev.endIndex !== nextRange.endIndex) {
+      visibleRangeRef.current = nextRange
+      onVisibleRangeChange(nextRange)
+    }
+  }, [virtualItems, onVisibleRangeChange])
+
   const fetchWordDefinition = useCallback(async (word: string) => {
     if (!word) {
       return
     }
+
+    wordDefinitionRequestIdRef.current += 1
+    const requestId = wordDefinitionRequestIdRef.current
 
     setWordDefinitionError(null)
     setIsWordDefinitionLoading(true)
 
     try {
       const result = await lookupWordDefinitionAction({ word })
+      if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
+        return
+      }
       setWordDefinition(result.definition)
     } catch (error) {
+      if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
+        return
+      }
       const message =
         error instanceof Error ? error.message : "Unable to fetch definition right now."
       setWordDefinitionError(message)
       setWordDefinition(null)
     } finally {
-      setIsWordDefinitionLoading(false)
+      if (isMountedRef.current && wordDefinitionRequestIdRef.current === requestId) {
+        setIsWordDefinitionLoading(false)
+      }
     }
   }, [lookupWordDefinitionAction])
 
@@ -336,15 +384,23 @@ export default function LanguageReader({
       return
     }
 
+    wordTranslationRequestIdRef.current += 1
+    const requestId = wordTranslationRequestIdRef.current
+
     const normalizedKey = word.toLowerCase()
-    const cached = wordTranslationsCache[normalizedKey]
+    const cache = wordTranslationsCacheRef.current
+    const cached = cache.get(normalizedKey)
     setWordTranslationError(null)
 
     if (cached) {
-      setIsWordTranslationLoading(false)
-      setWordTranslationResult(cached)
-      if (!wordDefinition) {
-        void fetchWordDefinition(word)
+      cache.delete(normalizedKey)
+      cache.set(normalizedKey, cached)
+      if (isMountedRef.current && wordTranslationRequestIdRef.current === requestId) {
+        setIsWordTranslationLoading(false)
+        setWordTranslationResult(cached)
+        if (!wordDefinition) {
+          void fetchWordDefinition(word)
+        }
       }
       return
     }
@@ -359,24 +415,41 @@ export default function LanguageReader({
         translation: result.translation,
       }
 
-      setWordTranslationsCache((prev) => ({
-        ...prev,
-        [normalizedKey]: payload,
-      }))
+      if (!isMountedRef.current || wordTranslationRequestIdRef.current !== requestId) {
+        return
+      }
+
+      cache.set(normalizedKey, payload)
+      if (cache.size > MAX_WORD_TRANSLATION_CACHE_SIZE) {
+        const oldestKey = cache.keys().next().value
+        if (oldestKey) {
+          cache.delete(oldestKey)
+        }
+      }
       setWordTranslationResult(payload)
-      
+
       void fetchWordDefinition(word)
     } catch (error) {
+      if (!isMountedRef.current || wordTranslationRequestIdRef.current !== requestId) {
+        return
+      }
       const message =
         error instanceof Error ? error.message : "Unable to translate this word right now."
       setWordTranslationError(message)
     } finally {
-      setIsWordTranslationLoading(false)
+      if (isMountedRef.current && wordTranslationRequestIdRef.current === requestId) {
+        setIsWordTranslationLoading(false)
+      }
     }
-  }, [wordTranslationsCache, wordDefinition, translateWordAction, fetchWordDefinition])
+  }, [wordDefinition, translateWordAction, fetchWordDefinition])
 
   const ensureTranslation = useCallback(async (paragraph: Paragraph) => {
-    if (translations[paragraph.id] || translationErrors[paragraph.id] || loadingTranslations.has(paragraph.id)) {
+    if (
+      paragraph.isPlaceholder ||
+      translations[paragraph.id] ||
+      translationErrors[paragraph.id] ||
+      loadingTranslations.has(paragraph.id)
+    ) {
       return
     }
 
@@ -391,15 +464,24 @@ export default function LanguageReader({
       return rest
     })
 
+    const nextRequestId = (paragraphTranslationRequestIdsRef.current.get(paragraph.id) ?? 0) + 1
+    paragraphTranslationRequestIdsRef.current.set(paragraph.id, nextRequestId)
+
     try {
       const result = await translateParagraphAction({
         text: paragraph.spanish,
       })
+      if (!isMountedRef.current || paragraphTranslationRequestIdsRef.current.get(paragraph.id) !== nextRequestId) {
+        return
+      }
       setTranslations((prev) => ({
         ...prev,
         [paragraph.id]: result.translatedText,
       }))
     } catch (error) {
+      if (!isMountedRef.current || paragraphTranslationRequestIdsRef.current.get(paragraph.id) !== nextRequestId) {
+        return
+      }
       const message =
         error instanceof Error ? error.message : "An unexpected error prevented translating this paragraph."
       setTranslationErrors((prev) => ({
@@ -407,15 +489,21 @@ export default function LanguageReader({
         [paragraph.id]: message,
       }))
     } finally {
-      setLoadingTranslations((prev) => {
-        const updated = new Set(prev)
-        updated.delete(paragraph.id)
-        return updated
-      })
+      if (isMountedRef.current && paragraphTranslationRequestIdsRef.current.get(paragraph.id) === nextRequestId) {
+        paragraphTranslationRequestIdsRef.current.delete(paragraph.id)
+        setLoadingTranslations((prev) => {
+          const updated = new Set(prev)
+          updated.delete(paragraph.id)
+          return updated
+        })
+      }
     }
   }, [translations, translationErrors, loadingTranslations, translateParagraphAction])
 
   const handleParagraphClick = useCallback((paragraph: Paragraph) => {
+    if (paragraph.isPlaceholder) {
+      return
+    }
     setVisibleTranslations((prev) => {
       const updated = new Set(prev)
 
@@ -547,6 +635,15 @@ export default function LanguageReader({
   }
 
   const renderClickableText = useCallback((paragraph: Paragraph) => {
+    if (paragraph.isPlaceholder) {
+      return (
+        <span className="inline-flex items-center gap-2 text-sm text-muted-foreground/80">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading chunk…
+        </span>
+      )
+    }
+
     const handleTextClick = (event: React.MouseEvent<HTMLElement>) => {
       event.stopPropagation()
       const word = extractWordFromClick(event, paragraph.spanish)
@@ -567,6 +664,17 @@ export default function LanguageReader({
   }, [handleWordClick, extractWordFromClick])
 
   const renderTranslationView = useCallback((paragraph: Paragraph) => {
+    if (paragraph.isPlaceholder) {
+      return (
+        <div className="rounded-2xl border border-border/60 bg-card/80 p-6 shadow-inner">
+          <div className="flex items-center gap-3 text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading paragraph…
+          </div>
+        </div>
+      )
+    }
+
     const spanishText = renderClickableText(paragraph)
     const translatedText = translations[paragraph.id]
     const translationError = translationErrors[paragraph.id]
@@ -701,7 +809,7 @@ export default function LanguageReader({
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b bg-card/50 px-6 py-4 backdrop-blur-sm">
+      <header className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between border-b bg-card/50 px-6 py-4 backdrop-blur-sm">
         <Button
           variant="ghost"
           size="icon"
@@ -725,7 +833,7 @@ export default function LanguageReader({
         </div>
       </header>
 
-      <div ref={scrollParentRef} className="flex-1 overflow-auto">
+      <div ref={scrollParentRef} className="flex-1 overflow-auto pt-[73px]">
         {paragraphs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6">
             {isInitialLoading ? (
@@ -747,7 +855,8 @@ export default function LanguageReader({
               if (!paragraph) {
                 return null
               }
-              const hasTranslation = paragraph.spanish.trim().length > 0
+              const isPlaceholder = paragraph.isPlaceholder === true
+              const hasTranslation = !isPlaceholder && paragraph.spanish.trim().length > 0
               const isTranslationVisible = visibleTranslations.has(paragraph.id)
 
               return (

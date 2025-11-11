@@ -3,9 +3,10 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { api } from "./_generated/api";
-import { extractParagraphsFromEpub } from "./utils/epub";
+import { extractParagraphsFromEpub, streamParagraphsFromEpub } from "./utils/epub";
 
 const CHUNK_SIZE = 50;
+const CHUNK_FLUSH_BATCH = 4;
 
 export const processBook = action({
   args: {
@@ -40,26 +41,57 @@ export const processBook = action({
       }
       const fileBuffer = await fileBlob.arrayBuffer();
 
-      const paragraphs = await extractParagraphsFromEpub(fileBuffer);
+      let chunkIndex = 0;
+      let totalChunks = 0;
+      let chunkParagraphs: Array<{ id: number; text: string }> = [];
+      const chunkBuffer: Array<{ chunkIndex: number; paragraphs: Array<{ id: number; text: string }> }> = [];
 
-      const chunks: Array<{ chunkIndex: number; paragraphs: Array<{ id: number; text: string }> }> = [];
-      for (let i = 0; i < paragraphs.length; i += CHUNK_SIZE) {
-        const chunkParagraphs = paragraphs.slice(i, i + CHUNK_SIZE);
-        chunks.push({
-          chunkIndex: Math.floor(i / CHUNK_SIZE),
-          paragraphs: chunkParagraphs,
+      const flushChunks = async () => {
+        if (chunkBuffer.length === 0) {
+          return;
+        }
+        await ctx.runMutation(api.books.insertChunks, {
+          bookId,
+          chunks: [...chunkBuffer],
         });
+        chunkBuffer.length = 0;
+      };
+
+      const queueChunk = async (paragraphs: Array<{ id: number; text: string }>) => {
+        if (paragraphs.length === 0) {
+          return;
+        }
+        chunkBuffer.push({
+          chunkIndex,
+          paragraphs,
+        });
+        chunkIndex += 1;
+        totalChunks += 1;
+        if (chunkBuffer.length >= CHUNK_FLUSH_BATCH) {
+          await flushChunks();
+        }
+      };
+
+      await streamParagraphsFromEpub(fileBuffer, async (paragraph) => {
+        chunkParagraphs.push(paragraph);
+        if (chunkParagraphs.length >= CHUNK_SIZE) {
+          const completedChunk = chunkParagraphs;
+          chunkParagraphs = [];
+          await queueChunk(completedChunk);
+        }
+      });
+
+      if (chunkParagraphs.length > 0) {
+        await queueChunk(chunkParagraphs);
+        chunkParagraphs = [];
       }
 
-      await ctx.runMutation(api.books.insertChunks, {
-        bookId,
-        chunks,
-      });
+      await flushChunks();
 
       await ctx.runMutation(api.books.updateProcessingStatus, {
         bookId,
         status: "completed",
-        totalChunks: chunks.length,
+        totalChunks,
       });
     } catch (error) {
       await ctx.runMutation(api.books.updateProcessingStatus, {

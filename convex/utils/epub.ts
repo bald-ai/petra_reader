@@ -17,16 +17,17 @@ type ExtractOptions = {
   maxParagraphs?: number;
 };
 
-export async function extractParagraphsFromEpub(
+export async function streamParagraphsFromEpub(
   rawData: ArrayBuffer,
+  handler: (paragraph: ParsedParagraph) => Promise<void> | void,
   options?: ExtractOptions,
-): Promise<ParsedParagraph[]> {
+): Promise<number> {
   const buffer = Buffer.from(rawData);
   // epub2 typings expect a path but the runtime also accepts a Buffer.
   const epub = await EPub.createAsync(buffer as unknown as string);
 
   const maxParagraphs = options?.maxParagraphs;
-  const paragraphs: ParsedParagraph[] = [];
+  let count = 0;
 
   for (const entry of epub.flow ?? []) {
     if (!entry?.id) {
@@ -40,16 +41,32 @@ export async function extractParagraphsFromEpub(
 
     const chapterParagraphs = extractParagraphsFromChapter(chapterHtml);
     for (const text of chapterParagraphs) {
-      paragraphs.push({
-        id: paragraphs.length + 1,
+      count += 1;
+      await handler({
+        id: count,
         text,
       });
-      if (maxParagraphs !== undefined && paragraphs.length >= maxParagraphs) {
-        return paragraphs;
+      if (maxParagraphs !== undefined && count >= maxParagraphs) {
+        return count;
       }
     }
   }
 
+  return count;
+}
+
+export async function extractParagraphsFromEpub(
+  rawData: ArrayBuffer,
+  options?: ExtractOptions,
+): Promise<ParsedParagraph[]> {
+  const paragraphs: ParsedParagraph[] = [];
+  await streamParagraphsFromEpub(
+    rawData,
+    async (paragraph) => {
+      paragraphs.push(paragraph);
+    },
+    options,
+  );
   return paragraphs;
 }
 

@@ -17,6 +17,8 @@ type ChunkRecord = {
 };
 
 const CHUNK_BATCH_SIZE = 4;
+const CHUNK_SIZE = 50;
+const CHUNK_WINDOW_PADDING = 2;
 
 function buildParagraphsFromChunks(chunks: ChunkRecord[]): Paragraph[] {
   if (chunks.length === 0) {
@@ -43,6 +45,15 @@ const DEFAULT_PARAGRAPH_LOOKUP = new Map(
   defaultParagraphs.map((paragraph) => [paragraph.id, paragraph] as const),
 );
 
+function createPlaceholderParagraph(index: number, existing?: Paragraph): Paragraph {
+  return {
+    id: existing?.id ?? -(index + 1),
+    spanish: "",
+    english: existing?.english ?? "",
+    isPlaceholder: true,
+  };
+}
+
 export default function ReaderPage() {
   const router = useRouter();
   const routeParams = useParams<{ bookId: string }>();
@@ -60,8 +71,16 @@ export default function ReaderPage() {
   const totalChunks = processingStatus?.totalChunks ?? 0;
 
   const [chunkRequestRange, setChunkRequestRange] = useState<{ from: number; to: number } | null>(null);
-  const [loadedChunks, setLoadedChunks] = useState<Record<number, ChunkRecord>>({});
   const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
+  const [highestLoadedChunkIndex, setHighestLoadedChunkIndex] = useState(-1);
+  const highestLoadedChunkIndexRef = useRef(-1);
+  const chunkMetadataRef = useRef<Map<number, { start: number; length: number }>>(new Map());
+  const activeChunkIndexesRef = useRef<Set<number>>(new Set());
+  const pendingChunkRequestRef = useRef<Set<number>>(new Set());
+  const chunkRequestInFlightRef = useRef(false);
+  const lastRequestedRangeRef = useRef<{ from: number; to: number } | null>(null);
+  const visibleRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null);
+  const desiredChunkWindowRef = useRef<{ startChunk: number; endChunk: number } | null>(null);
 
   const chunkRequestArgs =
     bookId && chunkRequestRange
@@ -75,10 +94,136 @@ export default function ReaderPage() {
   const chunkBatch = useQuery(api.books.getChunks, chunkRequestArgs);
 
   const isRequestingChunks = chunkRequestRange !== null;
-  const loadedChunkCount = Object.keys(loadedChunks).length;
 
+  const scheduleChunkFetch = useCallback(
+    (from: number, to: number) => {
+      if (!bookId || status !== "completed" || !totalChunks || totalChunks <= 0) {
+        return false;
+      }
+      if (chunkRequestInFlightRef.current) {
+        return false;
+      }
+      const clampedFrom = Math.max(0, Math.min(from, totalChunks - 1));
+      const clampedTo = Math.max(clampedFrom, Math.min(to, totalChunks - 1));
+      if (clampedFrom > clampedTo) {
+        return false;
+      }
+      chunkRequestInFlightRef.current = true;
+      setChunkRequestRange({ from: clampedFrom, to: clampedTo });
+      lastRequestedRangeRef.current = { from: clampedFrom, to: clampedTo };
+      for (let index = clampedFrom; index <= clampedTo; index++) {
+        pendingChunkRequestRef.current.add(index);
+      }
+      return true;
+    },
+    [bookId, status, totalChunks],
+  );
+
+  const pruneChunksOutsideWindow = useCallback((windowRange: { startChunk: number; endChunk: number }) => {
+    const activeChunks = activeChunkIndexesRef.current;
+    if (activeChunks.size === 0) {
+      return;
+    }
+    const toPrune: number[] = [];
+    activeChunks.forEach((chunkIndex) => {
+      if (chunkIndex < windowRange.startChunk || chunkIndex > windowRange.endChunk) {
+        toPrune.push(chunkIndex);
+      }
+    });
+    if (toPrune.length === 0) {
+      return;
+    }
+    setParagraphs((prev) => {
+      if (prev.length === 0) {
+        return prev;
+      }
+      const next = [...prev];
+      for (const chunkIndex of toPrune) {
+        const metadata = chunkMetadataRef.current.get(chunkIndex);
+        if (!metadata) {
+          activeChunks.delete(chunkIndex);
+          continue;
+        }
+        for (let offset = 0; offset < metadata.length; offset++) {
+          const paragraphIndex = metadata.start + offset;
+          const existing = next[paragraphIndex];
+          next[paragraphIndex] = createPlaceholderParagraph(paragraphIndex, existing);
+        }
+        activeChunks.delete(chunkIndex);
+      }
+      return next;
+    });
+  }, []);
+
+  const ensureChunksForWindow = useCallback(
+    (windowRange: { startChunk: number; endChunk: number }) => {
+      if (!bookId || status !== "completed") {
+        return;
+      }
+      if (windowRange.startChunk > windowRange.endChunk) {
+        return;
+      }
+      const missing: number[] = [];
+      for (let index = windowRange.startChunk; index <= windowRange.endChunk; index++) {
+        if (activeChunkIndexesRef.current.has(index)) {
+          continue;
+        }
+        if (pendingChunkRequestRef.current.has(index)) {
+          continue;
+        }
+        missing.push(index);
+      }
+      if (missing.length === 0) {
+        return;
+      }
+      let rangeStart = missing[0];
+      let previous = missing[0];
+      for (let i = 1; i < missing.length; i++) {
+        const current = missing[i];
+        if (current === previous + 1) {
+          previous = current;
+          continue;
+        }
+        if (scheduleChunkFetch(rangeStart, Math.min(previous, rangeStart + CHUNK_BATCH_SIZE - 1))) {
+          return;
+        }
+        rangeStart = current;
+        previous = current;
+      }
+      scheduleChunkFetch(rangeStart, Math.min(previous, rangeStart + CHUNK_BATCH_SIZE - 1));
+    },
+    [bookId, status, scheduleChunkFetch],
+  );
+
+  const handleVisibleRangeChange = useCallback(
+    (range: { startIndex: number; endIndex: number }) => {
+      if (!totalChunks || totalChunks <= 0) {
+        return;
+      }
+      visibleRangeRef.current = range;
+      const startChunk = Math.max(0, Math.floor(range.startIndex / CHUNK_SIZE) - CHUNK_WINDOW_PADDING);
+      const endChunk = Math.min(
+        totalChunks - 1,
+        Math.floor(range.endIndex / CHUNK_SIZE) + CHUNK_WINDOW_PADDING,
+      );
+      const windowRange = { startChunk, endChunk };
+      desiredChunkWindowRef.current = windowRange;
+      pruneChunksOutsideWindow(windowRange);
+      ensureChunksForWindow(windowRange);
+    },
+    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow],
+  );
   const resetLoadedData = useCallback(() => {
-    setLoadedChunks((prev) => (Object.keys(prev).length > 0 ? {} : prev));
+    chunkMetadataRef.current.clear();
+    activeChunkIndexesRef.current.clear();
+    pendingChunkRequestRef.current.clear();
+    desiredChunkWindowRef.current = null;
+    visibleRangeRef.current = null;
+    lastRequestedRangeRef.current = null;
+    highestLoadedChunkIndexRef.current = -1;
+    setHighestLoadedChunkIndex(-1);
+    chunkRequestInFlightRef.current = false;
+    setChunkRequestRange((prev) => (prev === null ? prev : null));
     setParagraphs((prev) => (prev.length > 0 ? [] : prev));
   }, []);
 
@@ -94,10 +239,7 @@ export default function ReaderPage() {
 
     if (status === "completed" && totalChunks > 0) {
       startTransition(() => {
-        setChunkRequestRange({
-          from: 0,
-          to: Math.min(totalChunks - 1, CHUNK_BATCH_SIZE - 1),
-        });
+        scheduleChunkFetch(0, Math.min(totalChunks - 1, CHUNK_BATCH_SIZE - 1));
       });
     } else {
       startTransition(() => {
@@ -105,7 +247,7 @@ export default function ReaderPage() {
         resetLoadedData();
       });
     }
-  }, [bookId, resetLoadedData, status, totalChunks]);
+  }, [bookId, resetLoadedData, scheduleChunkFetch, status, totalChunks]);
 
   useEffect(() => {
     if (!chunkRequestRange) {
@@ -115,80 +257,120 @@ export default function ReaderPage() {
       return;
     }
 
-    if (!chunkBatch || chunkBatch.length === 0) {
-      if (totalChunks > 0 && loadedChunkCount >= totalChunks) {
-        startTransition(() => {
-          setChunkRequestRange(null);
-        });
+    const clearPendingRange = () => {
+      if (lastRequestedRangeRef.current) {
+        for (
+          let index = lastRequestedRangeRef.current.from;
+          index <= lastRequestedRangeRef.current.to;
+          index++
+        ) {
+          pendingChunkRequestRef.current.delete(index);
+        }
+        lastRequestedRangeRef.current = null;
       }
+    };
+
+    if (!chunkBatch || chunkBatch.length === 0) {
+      startTransition(() => {
+        setChunkRequestRange(null);
+      });
+      chunkRequestInFlightRef.current = false;
+      clearPendingRange();
       return;
     }
 
-    startTransition(() => {
-      const newChunks: ChunkRecord[] = [];
+    const unseenChunks = chunkBatch.filter(
+      (chunk) => !activeChunkIndexesRef.current.has(chunk.chunkIndex),
+    );
 
-      setLoadedChunks((prev) => {
-        let hasChanges = false;
-        const next = { ...prev };
-        for (const chunk of chunkBatch) {
-          if (next[chunk.chunkIndex]) {
-            continue;
-          }
-          next[chunk.chunkIndex] = chunk;
-          newChunks.push(chunk);
-          hasChanges = true;
-        }
-        return hasChanges ? next : prev;
+    for (const chunk of chunkBatch) {
+      pendingChunkRequestRef.current.delete(chunk.chunkIndex);
+    }
+
+    if (unseenChunks.length === 0) {
+      chunkRequestInFlightRef.current = false;
+      clearPendingRange();
+      startTransition(() => {
+        setChunkRequestRange(null);
       });
+      return;
+    }
 
-      if (newChunks.length > 0) {
-        const appendedParagraphs = buildParagraphsFromChunks(newChunks);
-        setParagraphs((prev) => (prev.length > 0 ? [...prev, ...appendedParagraphs] : appendedParagraphs));
-      }
+    const prepared = unseenChunks
+      .map((chunk) => ({
+        chunkIndex: chunk.chunkIndex,
+        paragraphs: buildParagraphsFromChunks([chunk]),
+      }))
+      .sort((a, b) => a.chunkIndex - b.chunkIndex);
 
+    startTransition(() => {
+      let batchMaxIndex = highestLoadedChunkIndexRef.current;
+      setParagraphs((prev) => {
+        const next = prev.length > 0 ? [...prev] : [];
+        for (const entry of prepared) {
+          const chunkStart = entry.chunkIndex * CHUNK_SIZE;
+          const requiredLength = chunkStart + entry.paragraphs.length;
+          if (next.length < requiredLength) {
+            for (let i = next.length; i < requiredLength; i++) {
+              next[i] = createPlaceholderParagraph(i, next[i]);
+            }
+          }
+          for (let offset = 0; offset < entry.paragraphs.length; offset++) {
+            next[chunkStart + offset] = entry.paragraphs[offset];
+          }
+          chunkMetadataRef.current.set(entry.chunkIndex, {
+            start: chunkStart,
+            length: entry.paragraphs.length,
+          });
+          activeChunkIndexesRef.current.add(entry.chunkIndex);
+          batchMaxIndex = Math.max(batchMaxIndex, entry.chunkIndex);
+        }
+        return next;
+      });
+      setHighestLoadedChunkIndex((prev) => {
+        if (batchMaxIndex <= prev) {
+          highestLoadedChunkIndexRef.current = prev;
+          return prev;
+        }
+        highestLoadedChunkIndexRef.current = batchMaxIndex;
+        return batchMaxIndex;
+      });
       setChunkRequestRange(null);
     });
-  }, [chunkBatch, chunkRequestRange, loadedChunkCount, totalChunks]);
 
-  // Rebuild paragraphs from loadedChunks if paragraphs is empty but chunks exist
-  useEffect(() => {
-    if (paragraphs.length === 0 && Object.keys(loadedChunks).length > 0) {
-      const chunksArray = Object.values(loadedChunks);
-      const rebuiltParagraphs = buildParagraphsFromChunks(chunksArray);
-      if (rebuiltParagraphs.length > 0) {
-        startTransition(() => {
-          setParagraphs(rebuiltParagraphs);
-        });
+    chunkRequestInFlightRef.current = false;
+    clearPendingRange();
+
+    // Defer window management to avoid infinite loop - these will trigger new chunk requests
+    // which would cause this effect to run again immediately
+    setTimeout(() => {
+      if (desiredChunkWindowRef.current) {
+        pruneChunksOutsideWindow(desiredChunkWindowRef.current);
+        ensureChunksForWindow(desiredChunkWindowRef.current);
       }
-    }
-  }, [paragraphs.length, loadedChunks]);
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chunkBatch, chunkRequestRange]);
 
   const requestMoreChunks = useCallback(() => {
     if (!bookId || status !== "completed") {
       return;
     }
-    if (isRequestingChunks) {
+    if (!totalChunks || totalChunks <= 0) {
       return;
     }
-    if (!totalChunks || loadedChunkCount >= totalChunks) {
-      return;
-    }
-
-    const loadedIndexes = Object.keys(loadedChunks).map((key) => Number(key));
-    const highestLoaded = loadedIndexes.length > 0 ? Math.max(...loadedIndexes) : -1;
-    const nextFrom = highestLoaded + 1;
+    const nextFrom = Math.max(highestLoadedChunkIndex + 1, 0);
     if (nextFrom >= totalChunks) {
       return;
     }
-
     const nextTo = Math.min(totalChunks - 1, nextFrom + CHUNK_BATCH_SIZE - 1);
-    setChunkRequestRange({ from: nextFrom, to: nextTo });
-  }, [bookId, status, isRequestingChunks, totalChunks, loadedChunkCount, loadedChunks]);
+    scheduleChunkFetch(nextFrom, nextTo);
+  }, [bookId, status, totalChunks, scheduleChunkFetch, highestLoadedChunkIndex]);
 
   const hasMoreChunks =
     status === "completed" &&
     totalChunks > 0 &&
-    loadedChunkCount < totalChunks;
+    highestLoadedChunkIndex < totalChunks - 1;
 
   useEffect(() => {
     hasTouchedRef.current = false;
@@ -300,6 +482,7 @@ export default function ReaderPage() {
         isInitialLoading={paragraphs.length === 0 && isRequestingChunks}
         isLoadingMore={isRequestingChunks && paragraphs.length > 0}
         onLoadMore={hasMoreChunks ? requestMoreChunks : undefined}
+        onVisibleRangeChange={handleVisibleRangeChange}
         onBack={() => router.push("/")}
       />
     </>
