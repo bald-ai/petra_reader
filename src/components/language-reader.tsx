@@ -931,7 +931,7 @@ export default function LanguageReader({
                       <div
                         className={cn(
                           "pt-3",
-                          hasTranslation && "flex gap-4 sm:block sm:gap-0",
+                          hasTranslation && "flex items-baseline gap-4 sm:items-start sm:gap-0",
                         )}
                       >
                         {hasTranslation && (
