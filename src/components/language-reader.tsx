@@ -936,50 +936,54 @@ export default function LanguageReader({
                       >
                         {hasTranslation && (
                           <div
-                            className="h-9 w-9 shrink-0 select-none sm:hidden"
+                            className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0 sm:hidden"
                             aria-hidden="true"
                           />
                         )}
-                        <div className={hasTranslation ? "flex-1" : ""}>
-                          {(() => {
-                            if (!isTranslationVisible || !hasTranslation) {
-                              return null
-                            }
-                            const translatedText = translations[paragraph.id]
-                            const translationError = translationErrors[paragraph.id]
-                            const isLoading = loadingTranslations.has(paragraph.id)
-                            
-                            if (isLoading) {
-                              return (
-                                <span className="inline-flex items-center gap-2 text-muted-foreground">
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                  Translating…
-                                </span>
-                              )
-                            }
-                            if (translationError) {
-                              return <span className="text-sm font-medium text-destructive">{translationError}</span>
-                            }
-                            if (translatedText) {
-                              return (
-                                <p
-                                  className="font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
-                                  style={{ textAlign: "justify" }}
-                                >
-                                  {translatedText}
-                                </p>
-                              )
-                            }
+                        {(() => {
+                          if (!isTranslationVisible || !hasTranslation) {
+                            return null
+                          }
+                          const translatedText = translations[paragraph.id]
+                          const translationError = translationErrors[paragraph.id]
+                          const isLoading = loadingTranslations.has(paragraph.id)
+                          
+                          if (isLoading) {
+                            return (
+                              <span className="inline-flex items-center gap-2 text-muted-foreground">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Translating…
+                              </span>
+                            )
+                          }
+                          if (translationError) {
+                            return <span className="text-sm font-medium text-destructive">{translationError}</span>
+                          }
+                          if (translatedText) {
                             return (
                               <p
-                                className="font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
+                                className="flex-1 font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
                                 style={{ textAlign: "justify" }}
                               >
-                                {paragraph.english}
+                                {translatedText}
                               </p>
                             )
-                          })()}
-                        </div>
+                          }
+                          return (
+                            <p
+                              className="flex-1 font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
+                              style={{ textAlign: "justify" }}
+                            >
+                              {paragraph.english}
+                            </p>
+                          )
+                        })()}
+                        {hasTranslation && (
+                          <div
+                            className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0"
+                            aria-hidden="true"
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
