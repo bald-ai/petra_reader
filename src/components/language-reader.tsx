@@ -296,11 +296,6 @@ export default function LanguageReader({
   const scrollParentRef = useRef<HTMLDivElement | null>(null)
   const online = useOnline()
 
-  const hasVisibleTranslation = useMemo(
-    () => visibleTranslations.size > 0,
-    [visibleTranslations]
-  )
-
   const rowVirtualizer = useVirtualizer({
     count: paragraphs.length,
     getScrollElement: () => scrollParentRef.current,
@@ -732,68 +727,6 @@ export default function LanguageReader({
     )
   }, [handleWordClick, extractWordFromClick, online])
 
-  const renderTranslationView = useCallback((paragraph: Paragraph) => {
-    if (paragraph.isPlaceholder) {
-      return (
-        <div className="rounded-2xl border border-border/60 bg-card/80 p-6 shadow-inner">
-          <div className="flex items-center gap-3 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Loading paragraph…
-          </div>
-        </div>
-      )
-    }
-
-    const spanishText = renderClickableText(paragraph)
-    const translatedText = translations[paragraph.id]
-    const translationError = translationErrors[paragraph.id]
-    const isLoading = loadingTranslations.has(paragraph.id)
-    const translationBody = (() => {
-      if (isLoading) {
-        return (
-          <span className="inline-flex items-center gap-2 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            Translating…
-          </span>
-        )
-      }
-      if (translationError) {
-        return <span className="text-sm font-medium text-destructive">{translationError}</span>
-      }
-      if (translatedText) {
-        return translatedText
-      }
-      return paragraph.english
-    })()
-
-    return (
-      <div className="relative animate-in zoom-in-95 duration-300">
-        <div className="absolute -inset-4 rounded-2xl bg-primary/20 blur-xl" />
-        <div className="relative rounded-2xl border-2 border-primary/50 bg-background/95 p-6 backdrop-blur-sm shadow-2xl shadow-primary/10">
-          <div className="flex items-start gap-4">
-            <div className="flex-1 space-y-4">
-              <p className="font-serif text-lg leading-relaxed text-foreground">{spanishText}</p>
-              <div className="h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent" />
-              <p className="text-lg leading-relaxed text-muted-foreground/90 animate-in fade-in-50 duration-300">
-                {translationBody}
-              </p>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="mt-1 h-9 w-9 shrink-0 rounded-full hover:bg-destructive/10 hover:text-destructive transition-colors"
-              onClick={() => handleParagraphClick(paragraph)}
-              aria-label="Close translation"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </div>
-    )
-  }, [renderClickableText, translations, translationErrors, loadingTranslations, handleParagraphClick])
-
-
   const renderWordTranslationBar = () => {
     if (!isWordBarVisible && !wordTranslationResult && !wordTranslationError) {
       return null
@@ -849,7 +782,6 @@ export default function LanguageReader({
                     <p className="text-xs font-medium text-destructive py-2">{wordDefinitionError}</p>
                   ) : wordDefinition ? (
                     <div className="py-2">
-                      <p className="text-sm font-medium text-muted-foreground/70 mb-1">Definition:</p>
                       <p className="font-serif text-base font-light text-muted-foreground/90 leading-relaxed">
                         {wordDefinition}
                       </p>
@@ -946,39 +878,111 @@ export default function LanguageReader({
                     width: "100%",
                     transform: `translateY(${virtualItem.start}px)`,
                   }}
-                  className={cn(
-                    "pb-6 transition-opacity duration-300",
-                    hasVisibleTranslation && !isTranslationVisible ? "opacity-30" : "opacity-100"
-                  )}
+                  className="pb-6"
                 >
-                  {isTranslationVisible && hasTranslation ? (
-                    renderTranslationView(paragraph)
-                  ) : (
-                    <div className="group flex items-baseline gap-4">
+                  <div className="flex flex-col">
+                    <div
+                      className={cn(
+                        "group relative flex items-baseline gap-4",
+                        hasTranslation && "sm:items-start sm:gap-0",
+                      )}
+                    >
                       {hasTranslation && (
                         <div
-                          className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0"
+                          className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0 sm:hidden"
                           aria-hidden="true"
                         />
                       )}
-                      <p className="flex-1 font-serif text-lg leading-relaxed text-foreground">
+                      <p
+                        className="flex-1 font-serif text-lg leading-relaxed text-foreground text-justify"
+                        style={{ textAlign: "justify" }}
+                      >
                         {renderClickableText(paragraph)}
                       </p>
                       {hasTranslation && (
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75"
+                          className={cn(
+                            "h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
+                            "sm:absolute sm:-right-12 sm:top-0 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
+                          )}
                           onClick={() => handleParagraphClick(paragraph)}
-                          aria-label="Show translation"
+                          aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
                           title={translationButtonTitle}
                           disabled={disableTranslationToggle}
                         >
-                          <Link2 className="h-4 w-4" />
+                          {isTranslationVisible ? (
+                            <X className="h-4 w-4" />
+                          ) : (
+                            <Link2 className="h-4 w-4" />
+                          )}
                         </Button>
                       )}
                     </div>
-                  )}
+                    <div
+                      className={cn(
+                        "overflow-hidden transition-all duration-300 ease-out",
+                        isTranslationVisible && hasTranslation
+                          ? "max-h-[1000px] opacity-100"
+                          : "max-h-0 opacity-0"
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "pt-3",
+                          hasTranslation && "flex gap-4 sm:block sm:gap-0",
+                        )}
+                      >
+                        {hasTranslation && (
+                          <div
+                            className="h-9 w-9 shrink-0 select-none sm:hidden"
+                            aria-hidden="true"
+                          />
+                        )}
+                        <div className={hasTranslation ? "flex-1" : ""}>
+                          {(() => {
+                            if (!isTranslationVisible || !hasTranslation) {
+                              return null
+                            }
+                            const translatedText = translations[paragraph.id]
+                            const translationError = translationErrors[paragraph.id]
+                            const isLoading = loadingTranslations.has(paragraph.id)
+                            
+                            if (isLoading) {
+                              return (
+                                <span className="inline-flex items-center gap-2 text-muted-foreground">
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  Translating…
+                                </span>
+                              )
+                            }
+                            if (translationError) {
+                              return <span className="text-sm font-medium text-destructive">{translationError}</span>
+                            }
+                            if (translatedText) {
+                              return (
+                                <p
+                                  className="font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
+                                  style={{ textAlign: "justify" }}
+                                >
+                                  {translatedText}
+                                </p>
+                              )
+                            }
+                            return (
+                              <p
+                                className="font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
+                                style={{ textAlign: "justify" }}
+                              >
+                                {paragraph.english}
+                              </p>
+                            )
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               )
             })}

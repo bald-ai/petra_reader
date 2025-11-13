@@ -10,7 +10,6 @@ import { Trash2 } from "lucide-react";
 import { api } from "@convex/_generated/api";
 import type { Id } from "@convex/_generated/dataModel";
 import { formatFileSize } from "@/lib/format";
-import { InstallPrompt } from "@/components/install-prompt";
 
 type SortOption = "title" | "recent";
 
@@ -175,7 +174,6 @@ function LibraryContent() {
           >
             {isUploading ? "Uploading…" : "Upload EPUB"}
           </button>
-          <InstallPrompt className="rounded-full border border-foreground px-4 py-2 text-sm font-semibold text-foreground transition hover:bg-foreground hover:text-background" />
           <UserButton />
           <input
             ref={fileInputRef}
