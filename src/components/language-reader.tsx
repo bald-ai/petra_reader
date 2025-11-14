@@ -743,8 +743,8 @@ export default function LanguageReader({
         aria-live="polite"
       >
         <div className="pointer-events-auto w-full border-t border-border/60 bg-background/95 shadow-lg backdrop-blur">
-          <div className="flex items-center justify-between px-4 py-2 sm:px-6">
-            <div className="flex-1 space-y-1">
+          <div className="relative px-4 py-2 sm:px-6">
+            <div className="mx-auto flex max-w-2xl flex-col items-center space-y-1 px-4 text-center sm:px-8">
               <button
                 type="button"
                 onClick={handleBarExpand}
@@ -754,7 +754,7 @@ export default function LanguageReader({
                 <div className="h-0.5 w-12 mx-auto bg-muted-foreground/40 rounded-full" />
               </button>
               <div className="text-center">
-                <p className="font-serif text-lg font-light text-primary">
+                <p className="font-serif text-lg font-light text-white">
                   {currentWord ?? "Tap a word"}
                 </p>
                 {isWordTranslationLoading ? (
@@ -773,7 +773,7 @@ export default function LanguageReader({
                     isWordBarExpanded ? "max-h-96 opacity-100 mt-2" : "max-h-0 opacity-0",
                   )}
                 >
-                  {isWordDefinitionLoading ? (
+                {isWordDefinitionLoading ? (
                     <div className="flex items-center justify-center gap-2 py-2">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
                       <span className="text-sm font-light text-muted-foreground/90">Loading definition…</span>
@@ -781,7 +781,7 @@ export default function LanguageReader({
                   ) : wordDefinitionError ? (
                     <p className="text-xs font-medium text-destructive py-2">{wordDefinitionError}</p>
                   ) : wordDefinition ? (
-                    <div className="py-2">
+                    <div className="py-2 text-center">
                       <p className="font-serif text-base font-light text-muted-foreground/90 leading-relaxed">
                         {wordDefinition}
                       </p>
@@ -796,7 +796,7 @@ export default function LanguageReader({
             <Button
               variant="ghost"
               size="icon"
-              className="ml-4 h-7 w-7 shrink-0 rounded-full hover:bg-destructive/10 hover:text-destructive"
+              className="absolute right-4 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full hover:bg-destructive/10 hover:text-destructive sm:right-6"
               onClick={closeWordBar}
               aria-label="Close translation bar"
             >
