@@ -1,9 +1,9 @@
 "use client"
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react"
+import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useAction } from "convex/react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronLeft, HelpCircle, Link2, Loader2, MoreVertical, X } from "lucide-react"
+import { ChevronLeft, Link2, Loader2, MoreVertical, X } from "lucide-react"
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -38,6 +38,12 @@ type WordDefinition = {
 const MAX_VISIBLE_TRANSLATIONS = 5
 const LOAD_MORE_THRESHOLD = 4
 const MAX_WORD_TRANSLATION_CACHE_SIZE = 100
+const DEFAULT_FONT_SIZE = 14
+const MIN_FONT_SIZE = 10
+const MAX_FONT_SIZE = 24
+
+const clampFontSize = (size: number) => Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, size))
+const FONT_SIZE_OPTIONS = [-2, -1, 0, 1, 2].map((offset) => clampFontSize(DEFAULT_FONT_SIZE + offset))
 
 export const defaultParagraphs: Paragraph[] = [
   {
@@ -284,6 +290,10 @@ export default function LanguageReader({
   const [wordDefinition, setWordDefinition] = useState<string | null>(null)
   const [isWordDefinitionLoading, setIsWordDefinitionLoading] = useState(false)
   const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
+  const [readerFontSize, setReaderFontSize] = useState(DEFAULT_FONT_SIZE)
+  const [isFontMenuOpen, setIsFontMenuOpen] = useState(false)
+  const [isHeaderHidden, setIsHeaderHidden] = useState(false)
+  const [headerHeight, setHeaderHeight] = useState(56)
   const wordTranslationsCacheRef = useRef<Map<string, WordTranslationResult>>(new Map())
   const wordTranslationRequestIdRef = useRef(0)
   const wordDefinitionRequestIdRef = useRef(0)
@@ -293,7 +303,11 @@ export default function LanguageReader({
   const translateParagraphAction = useAction(api.translations.translateParagraph)
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
+  const headerRef = useRef<HTMLElement | null>(null)
+  const fontMenuRef = useRef<HTMLDivElement | null>(null)
   const scrollParentRef = useRef<HTMLDivElement | null>(null)
+  const lastScrollTopRef = useRef(0)
+  const lastHideScrollTopRef = useRef(0)
   const online = useOnline()
 
   const rowVirtualizer = useVirtualizer({
@@ -304,6 +318,94 @@ export default function LanguageReader({
   })
 
   const virtualItems = rowVirtualizer.getVirtualItems()
+
+  useLayoutEffect(() => {
+    const measureHeader = () => {
+      if (!headerRef.current) {
+        return
+      }
+      setHeaderHeight(headerRef.current.offsetHeight)
+    }
+    measureHeader()
+    window.addEventListener("resize", measureHeader)
+    return () => {
+      window.removeEventListener("resize", measureHeader)
+    }
+  }, [])
+
+  useEffect(() => {
+    const scrollElement = scrollParentRef.current
+    if (!scrollElement) {
+      return
+    }
+    lastScrollTopRef.current = scrollElement.scrollTop
+    const handleScroll = () => {
+      const currentTop = scrollElement.scrollTop
+      const lastTop = lastScrollTopRef.current
+      const delta = Math.abs(currentTop - lastTop)
+      if (delta < 4) {
+        return
+      }
+      const hideThreshold = headerHeight || 48
+      const showBuffer = 36
+      if (currentTop <= 4) {
+        if (isHeaderHidden) {
+          setIsHeaderHidden(false)
+        }
+        lastHideScrollTopRef.current = 0
+      } else if (currentTop > lastTop && currentTop > hideThreshold) {
+        if (!isHeaderHidden) {
+          setIsHeaderHidden(true)
+          lastHideScrollTopRef.current = currentTop
+        } else {
+          lastHideScrollTopRef.current = Math.max(lastHideScrollTopRef.current, currentTop)
+        }
+      } else if (currentTop < lastTop) {
+        if (isHeaderHidden) {
+          const revealPosition = Math.max(0, lastHideScrollTopRef.current - showBuffer)
+          if (currentTop <= revealPosition) {
+            setIsHeaderHidden(false)
+          }
+        }
+      }
+      lastScrollTopRef.current = Math.max(currentTop, 0)
+    }
+    scrollElement.addEventListener("scroll", handleScroll)
+    return () => {
+      scrollElement.removeEventListener("scroll", handleScroll)
+    }
+  }, [headerHeight, isHeaderHidden])
+
+  useEffect(() => {
+    if (!isFontMenuOpen) {
+      return
+    }
+    const handleClick = (event: MouseEvent) => {
+      if (!fontMenuRef.current) {
+        return
+      }
+      if (!fontMenuRef.current.contains(event.target as Node)) {
+        setIsFontMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsFontMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClick)
+    document.addEventListener("keydown", handleKeyDown)
+    return () => {
+      document.removeEventListener("mousedown", handleClick)
+      document.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [isFontMenuOpen])
+
+  useEffect(() => {
+    if (isHeaderHidden) {
+      setIsFontMenuOpen(false)
+    }
+  }, [isHeaderHidden])
 
   useEffect(() => {
     isMountedRef.current = true
@@ -696,6 +798,10 @@ export default function LanguageReader({
     setWordDefinitionError(null)
   }
 
+  const handleFontSizeSelect = useCallback((size: number) => {
+    setReaderFontSize(clampFontSize(size))
+  }, [])
+
   const renderClickableText = useCallback((paragraph: Paragraph) => {
     if (paragraph.isPlaceholder) {
       return (
@@ -720,12 +826,12 @@ export default function LanguageReader({
         onClick={handleTextClick}
         className="cursor-pointer select-text"
         title={lookupHint}
-        style={{ userSelect: 'text' }}
+        style={{ userSelect: "text", fontSize: `${readerFontSize}px` }}
       >
         {paragraph.spanish}
       </span>
     )
-  }, [handleWordClick, extractWordFromClick, online])
+  }, [handleWordClick, extractWordFromClick, online, readerFontSize])
 
   const renderWordTranslationBar = () => {
     if (!isWordBarVisible && !wordTranslationResult && !wordTranslationError) {
@@ -754,7 +860,7 @@ export default function LanguageReader({
                 <div className="h-0.5 w-12 mx-auto bg-muted-foreground/40 rounded-full" />
               </button>
               <div className="text-center">
-                <p className="font-serif text-lg font-light text-white">
+                <p className="font-serif text-lg font-light text-muted-foreground">
                   {currentWord ?? "Tap a word"}
                 </p>
                 {isWordTranslationLoading ? (
@@ -782,7 +888,7 @@ export default function LanguageReader({
                     <p className="text-xs font-medium text-destructive py-2">{wordDefinitionError}</p>
                   ) : wordDefinition ? (
                     <div className="py-2 text-center">
-                      <p className="font-serif text-base font-light text-muted-foreground/90 leading-relaxed">
+                      <p className="font-serif text-base font-light text-muted-foreground/70 leading-relaxed">
                         {wordDefinition}
                       </p>
                     </div>
@@ -810,31 +916,68 @@ export default function LanguageReader({
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="fixed top-0 left-0 right-0 z-10 flex items-center justify-between border-b bg-card/50 px-6 py-4 backdrop-blur-sm">
+      <header
+        ref={headerRef}
+        className={cn(
+          "fixed top-0 left-0 right-0 z-20 flex items-center justify-between border-b bg-card/60 px-4 py-2 backdrop-blur-sm transition-transform duration-200 ease-out shadow-sm",
+          isHeaderHidden ? "-translate-y-full" : "translate-y-0",
+        )}
+      >
         <Button
           variant="ghost"
-          size="icon"
+          size="icon-sm"
           className="hover:bg-accent"
           onClick={() => onBack?.()}
           aria-label="Go back"
         >
-          <ChevronLeft className="h-5 w-5" />
+          <ChevronLeft className="h-4 w-4" />
         </Button>
-        <div className="flex-1 text-center">
-          <h1 className="text-xl font-semibold tracking-tight">{title ?? "Capítulo Seis"}</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">{subtitle ?? "1 Devorador de Almas"}</p>
+        <div className="flex-1 px-2 text-center">
+          <h1 className="text-lg font-semibold leading-tight tracking-tight">{title ?? "Capítulo Seis"}</h1>
+          <p className="mt-0.5 text-xs text-muted-foreground">{subtitle ?? "1 Devorador de Almas"}</p>
         </div>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="icon" className="hover:bg-accent" aria-label="Help">
-            <HelpCircle className="h-5 w-5" />
+        <div ref={fontMenuRef} className="relative flex items-center justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hover:bg-accent"
+            aria-label="Reading options"
+            aria-haspopup="menu"
+            aria-expanded={isFontMenuOpen}
+            onClick={() => setIsFontMenuOpen((prev) => !prev)}
+          >
+            <MoreVertical className="h-4 w-4" />
           </Button>
-          <Button variant="ghost" size="icon" className="hover:bg-accent" aria-label="More options">
-            <MoreVertical className="h-5 w-5" />
-          </Button>
+          {isFontMenuOpen && (
+            <div className="absolute right-0 top-full mt-2 w-48 rounded-lg border border-border/60 bg-card/95 p-3 text-left shadow-xl backdrop-blur">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Font size</p>
+              <div className="mt-2 grid grid-cols-5 gap-1">
+                {FONT_SIZE_OPTIONS.map((size) => (
+                  <button
+                    type="button"
+                    key={size}
+                    className={cn(
+                      "rounded-md border px-2 py-1 text-sm font-medium transition-colors",
+                      size === readerFontSize
+                        ? "border-primary bg-primary/90 text-primary-foreground"
+                        : "border-border/80 bg-background/40 hover:border-border hover:bg-accent/60",
+                    )}
+                    onClick={() => handleFontSizeSelect(size)}
+                  >
+                    {size}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
-      <div ref={scrollParentRef} className="flex-1 overflow-auto pt-[73px]">
+      <div
+        ref={scrollParentRef}
+        className="flex-1 overflow-auto"
+        style={{ paddingTop: headerHeight }}
+      >
         {paragraphs.length === 0 ? (
           <div className="flex h-full items-center justify-center px-6">
             {isInitialLoading ? (
@@ -848,7 +991,7 @@ export default function LanguageReader({
           </div>
         ) : (
           <div
-            className="relative mx-auto max-w-4xl px-6 py-8 pb-48"
+            className="relative mx-auto w-full max-w-5xl px-4 sm:px-6 py-8 pb-48"
             style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
           >
             {virtualItems.map((virtualItem) => {
@@ -883,19 +1026,19 @@ export default function LanguageReader({
                   <div className="flex flex-col">
                     <div
                       className={cn(
-                        "group relative flex items-baseline gap-4",
+                        "group relative flex items-baseline gap-1 px-1 sm:px-0",
                         hasTranslation && "sm:items-start sm:gap-0",
                       )}
                     >
                       {hasTranslation && (
                         <div
-                          className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0 sm:hidden"
+                          className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
                           aria-hidden="true"
                         />
                       )}
                       <p
-                        className="flex-1 font-serif text-lg leading-relaxed text-foreground text-justify"
-                        style={{ textAlign: "justify" }}
+                        className="flex-1 font-serif leading-relaxed text-foreground/80 text-left tracking-[0.01em] [text-wrap:pretty]"
+                        style={{ fontSize: `${readerFontSize}px` }}
                       >
                         {renderClickableText(paragraph)}
                       </p>
@@ -904,8 +1047,8 @@ export default function LanguageReader({
                           variant="ghost"
                           size="icon"
                           className={cn(
-                            "h-9 w-9 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
-                            "sm:absolute sm:-right-12 sm:top-0 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
+                            "h-8 w-8 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
+                            "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
                           )}
                           onClick={() => handleParagraphClick(paragraph)}
                           aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
@@ -931,12 +1074,12 @@ export default function LanguageReader({
                       <div
                         className={cn(
                           "pt-3",
-                          hasTranslation && "flex items-baseline gap-4 sm:items-start sm:gap-0",
+                          hasTranslation && "flex items-baseline gap-1 px-1 sm:px-0 sm:items-start sm:gap-0",
                         )}
                       >
                         {hasTranslation && (
                           <div
-                            className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0 sm:hidden"
+                            className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
                             aria-hidden="true"
                           />
                         )}
@@ -962,8 +1105,8 @@ export default function LanguageReader({
                           if (translatedText) {
                             return (
                               <p
-                                className="flex-1 font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
-                                style={{ textAlign: "justify" }}
+                                className="flex-1 font-serif leading-relaxed text-muted-foreground/70 text-left tracking-[0.01em] [text-wrap:pretty]"
+                                style={{ fontSize: `${readerFontSize}px` }}
                               >
                                 {translatedText}
                               </p>
@@ -971,8 +1114,8 @@ export default function LanguageReader({
                           }
                           return (
                             <p
-                              className="flex-1 font-serif text-lg leading-relaxed text-muted-foreground/90 text-justify"
-                              style={{ textAlign: "justify" }}
+                              className="flex-1 font-serif leading-relaxed text-muted-foreground/90 text-left tracking-[0.01em] [text-wrap:pretty]"
+                              style={{ fontSize: `${readerFontSize}px` }}
                             >
                               {paragraph.english}
                             </p>
@@ -980,7 +1123,7 @@ export default function LanguageReader({
                         })()}
                         {hasTranslation && (
                           <div
-                            className="h-9 w-9 shrink-0 -translate-y-0.5 select-none opacity-0"
+                            className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
                             aria-hidden="true"
                           />
                         )}
