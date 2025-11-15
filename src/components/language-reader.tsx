@@ -902,7 +902,7 @@ export default function LanguageReader({
             <Button
               variant="ghost"
               size="icon"
-              className="absolute right-4 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full hover:bg-destructive/10 hover:text-destructive sm:right-6"
+              className="absolute right-4 top-3 h-7 w-7 rounded-full hover:bg-destructive/10 hover:text-destructive sm:right-6 sm:top-3"
               onClick={closeWordBar}
               aria-label="Close translation bar"
             >
