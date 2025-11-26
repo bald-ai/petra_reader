@@ -35,15 +35,44 @@ type WordDefinition = {
   }
 }
 
+type ConjugationTense = "present" | "preterite" | "imperfect" | "conditional" | "future"
+type ConjugationsByTense = Record<
+  ConjugationTense,
+  Array<{
+    pronoun: string
+    form: string
+  }>
+>
+
 const MAX_VISIBLE_TRANSLATIONS = 5
 const LOAD_MORE_THRESHOLD = 4
 const MAX_WORD_TRANSLATION_CACHE_SIZE = 100
+const MAX_CONJUGATION_CACHE_SIZE = 50
 const DEFAULT_FONT_SIZE = 14
 const MIN_FONT_SIZE = 10
 const MAX_FONT_SIZE = 24
+const CONJUGATION_TENSES: ConjugationTense[] = [
+  "present",
+  "preterite",
+  "imperfect",
+  "conditional",
+  "future",
+]
 
 const clampFontSize = (size: number) => Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, size))
 const FONT_SIZE_OPTIONS = [-2, -1, 0, 1, 2].map((offset) => clampFontSize(DEFAULT_FONT_SIZE + offset))
+const buildEmptyConjugations = (): ConjugationsByTense =>
+  CONJUGATION_TENSES.reduce((acc, tense) => {
+    acc[tense] = []
+    return acc
+  }, {} as ConjugationsByTense)
+const isVerbType = (type?: string | null) => {
+  if (!type) {
+    return false
+  }
+  const normalized = type.trim().toLowerCase()
+  return /^verb(?:\b|$)/.test(normalized) || /^verbo(?:\b|$)/.test(normalized)
+}
 
 export const defaultParagraphs: Paragraph[] = [
   {
@@ -287,22 +316,34 @@ export default function LanguageReader({
   const [isWordTranslationLoading, setIsWordTranslationLoading] = useState(false)
   const [isWordBarVisible, setIsWordBarVisible] = useState(false)
   const [isWordBarExpanded, setIsWordBarExpanded] = useState(false)
+  const [wordContextSentence, setWordContextSentence] = useState<string | null>(null)
   const [wordDefinition, setWordDefinition] = useState<string | null>(null)
+  const [wordType, setWordType] = useState<string | null>(null)
   const [isWordDefinitionLoading, setIsWordDefinitionLoading] = useState(false)
   const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
   const [readerFontSize, setReaderFontSize] = useState(DEFAULT_FONT_SIZE)
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false)
   const [isHeaderHidden, setIsHeaderHidden] = useState(false)
   const [headerHeight, setHeaderHeight] = useState(56)
+  const [activeTab, setActiveTab] = useState("translation")
+  const [activeConjugationTense, setActiveConjugationTense] =
+    useState<ConjugationTense>("present")
+  const [conjugations, setConjugations] = useState<ConjugationsByTense | null>(null)
+  const [isConjugationLoading, setIsConjugationLoading] = useState(false)
+  const [conjugationError, setConjugationError] = useState<string | null>(null)
   const wordTranslationsCacheRef = useRef<Map<string, WordTranslationResult>>(new Map())
+  const conjugationCacheRef = useRef<Map<string, ConjugationsByTense>>(new Map())
   const wordTranslationRequestIdRef = useRef(0)
   const wordDefinitionRequestIdRef = useRef(0)
+  const conjugationRequestIdRef = useRef(0)
   const paragraphTranslationRequestIdsRef = useRef(new Map<number, number>())
   const isMountedRef = useRef(true)
   const visibleRangeRef = useRef<{ startIndex: number; endIndex: number } | null>(null)
   const translateParagraphAction = useAction(api.translations.translateParagraph)
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
+  const lookupWordTypeAction = useAction(api.translations.lookupWordType)
+  const lookupVerbConjugationsAction = useAction(api.translations.lookupVerbConjugations)
   const headerRef = useRef<HTMLElement | null>(null)
   const fontMenuRef = useRef<HTMLDivElement | null>(null)
   const scrollParentRef = useRef<HTMLDivElement | null>(null)
@@ -488,7 +529,98 @@ export default function LanguageReader({
     // Only mark as attempted if we've waited a reasonable amount and still can't find it
   }, [paragraphs, isInitialLoading, rowVirtualizer])
 
-  const fetchWordDefinition = useCallback(async (word: string) => {
+  const fetchWordConjugations = useCallback(
+    async (word: string) => {
+      if (!word) {
+        return
+      }
+
+      conjugationRequestIdRef.current += 1
+      const requestId = conjugationRequestIdRef.current
+      const cacheKey = word.toLowerCase()
+      const cache = conjugationCacheRef.current
+      const cached = cache.get(cacheKey)
+      setConjugationError(null)
+
+      if (cached) {
+        cache.delete(cacheKey)
+        cache.set(cacheKey, cached)
+        if (isMountedRef.current && conjugationRequestIdRef.current === requestId) {
+          setIsConjugationLoading(false)
+          setConjugations(cached)
+        }
+        return
+      }
+
+      if (!online) {
+        if (isMountedRef.current && conjugationRequestIdRef.current === requestId) {
+          setIsConjugationLoading(false)
+          setConjugationError("Offline — conjugations resume when you reconnect.")
+          setConjugations(null)
+        }
+        return
+      }
+
+      setIsConjugationLoading(true)
+      setConjugations(null)
+
+      try {
+        const result = await lookupVerbConjugationsAction({ word })
+        if (!isMountedRef.current || conjugationRequestIdRef.current !== requestId) {
+          return
+        }
+
+        const normalized: ConjugationsByTense = buildEmptyConjugations()
+        const incoming = result?.conjugations
+        for (const tense of CONJUGATION_TENSES) {
+          const entries = incoming?.[tense]
+          if (Array.isArray(entries)) {
+            normalized[tense] = entries
+              .map((entry) => ({
+                pronoun:
+                  typeof entry?.pronoun === "string" ? entry.pronoun : (entry as any)?.[0],
+                form: typeof entry?.form === "string" ? entry.form : (entry as any)?.[1],
+              }))
+              .filter(
+                (entry) =>
+                  typeof entry.pronoun === "string" &&
+                  entry.pronoun.trim() &&
+                  typeof entry.form === "string" &&
+                  entry.form.trim(),
+              )
+              .map((entry) => ({
+                pronoun: entry.pronoun.trim(),
+                form: entry.form.trim(),
+              }))
+          }
+        }
+
+        cache.set(cacheKey, normalized)
+        if (cache.size > MAX_CONJUGATION_CACHE_SIZE) {
+          const oldestKey = cache.keys().next().value
+          if (oldestKey) {
+            cache.delete(oldestKey)
+          }
+        }
+        setConjugations(normalized)
+      } catch (error) {
+        if (!isMountedRef.current || conjugationRequestIdRef.current !== requestId) {
+          return
+        }
+        const message =
+          error instanceof Error ? error.message : "Unable to fetch conjugations right now."
+        setConjugationError(message)
+        setConjugations(null)
+      } finally {
+        if (isMountedRef.current && conjugationRequestIdRef.current === requestId) {
+          setIsConjugationLoading(false)
+        }
+      }
+    },
+    [lookupVerbConjugationsAction, online],
+  )
+
+  const fetchWordDefinition = useCallback(async (word: string, sentence?: string) => {
     if (!word) {
       return
     }
@@ -506,11 +638,26 @@ export default function LanguageReader({
     setIsWordDefinitionLoading(true)
 
     try {
-      const result = await lookupWordDefinitionAction({ word })
+      const definitionPromise = lookupWordDefinitionAction({ word, sentence })
+      const typePromise = lookupWordTypeAction({ word, sentence }).catch(() => null)
+
+      const [definitionResult, typeResult] = await Promise.all([definitionPromise, typePromise])
+
       if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
         return
       }
-      setWordDefinition(result.definition)
+
+      const resolvedType = typeResult?.type || null
+      setWordDefinition(definitionResult.definition)
+      setWordType(resolvedType)
+
+      if (isVerbType(resolvedType)) {
+        void fetchWordConjugations(word)
+      } else {
+        setConjugations(null)
+        setConjugationError(null)
+        setIsConjugationLoading(false)
+      }
     } catch (error) {
       if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
         return
@@ -519,12 +666,16 @@ export default function LanguageReader({
         error instanceof Error ? error.message : "Unable to fetch definition right now."
       setWordDefinitionError(message)
       setWordDefinition(null)
+      setWordType(null)
+      setConjugations(null)
+      setConjugationError(null)
+      setIsConjugationLoading(false)
     } finally {
       if (isMountedRef.current && wordDefinitionRequestIdRef.current === requestId) {
         setIsWordDefinitionLoading(false)
       }
     }
-  }, [lookupWordDefinitionAction, online])
+  }, [lookupWordDefinitionAction, lookupWordTypeAction, fetchWordConjugations, online])
 
   const fetchWordTranslation = useCallback(async (word: string) => {
     if (!word) {
@@ -546,7 +697,7 @@ export default function LanguageReader({
         setIsWordTranslationLoading(false)
         setWordTranslationResult(cached)
         if (!wordDefinition) {
-          void fetchWordDefinition(word)
+          void fetchWordDefinition(word, wordContextSentence ?? undefined)
         }
       }
       return
@@ -584,7 +735,7 @@ export default function LanguageReader({
       }
       setWordTranslationResult(payload)
 
-      void fetchWordDefinition(word)
+      void fetchWordDefinition(word, wordContextSentence ?? undefined)
     } catch (error) {
       if (!isMountedRef.current || wordTranslationRequestIdRef.current !== requestId) {
         return
@@ -597,7 +748,7 @@ export default function LanguageReader({
         setIsWordTranslationLoading(false)
       }
     }
-  }, [wordDefinition, translateWordAction, fetchWordDefinition, online])
+  }, [wordDefinition, translateWordAction, fetchWordDefinition, online, wordContextSentence])
 
   const ensureTranslation = useCallback(async (paragraph: Paragraph) => {
     if (
@@ -708,17 +859,26 @@ export default function LanguageReader({
     })
   }, [ensureTranslation])
 
-  const handleWordClick = useCallback((word: string) => {
+  const handleWordClick = useCallback((word: string, sentence?: string) => {
     const cleanWord = word.replace(/[.,;:!?"""¿¡]/g, "")
     if (!cleanWord) {
       return
     }
 
     setActiveWord(cleanWord)
+    setWordContextSentence(sentence ?? null)
     setIsWordBarVisible(true)
     setIsWordBarExpanded(false)
+    setActiveTab("translation")
+    setActiveConjugationTense("present")
     setWordDefinition(null)
+    setWordType(null)
     setWordDefinitionError(null)
+    setConjugations(null)
+    setConjugationError(null)
+    setIsConjugationLoading(false)
+    wordDefinitionRequestIdRef.current += 1
+    conjugationRequestIdRef.current += 1
     void fetchWordTranslation(cleanWord)
   }, [fetchWordTranslation])
 
@@ -785,8 +945,11 @@ export default function LanguageReader({
   }, [])
 
   const handleBarExpand = () => {
-    setIsWordBarExpanded(!isWordBarExpanded)
+    setIsWordBarExpanded(true)
   }
+
+  // Removed drag handlers
+
 
   const closeWordBar = () => {
     setIsWordBarVisible(false)
@@ -795,7 +958,17 @@ export default function LanguageReader({
     setWordTranslationResult(null)
     setWordTranslationError(null)
     setWordDefinition(null)
+    setWordContextSentence(null)
+    setWordType(null)
     setWordDefinitionError(null)
+    setConjugations(null)
+    setConjugationError(null)
+    setIsConjugationLoading(false)
+    setActiveConjugationTense("present")
+    wordTranslationRequestIdRef.current += 1
+    wordDefinitionRequestIdRef.current += 1
+    conjugationRequestIdRef.current += 1
+    setActiveTab("translation")
   }
 
   const handleFontSizeSelect = useCallback((size: number) => {
@@ -816,7 +989,7 @@ export default function LanguageReader({
       event.stopPropagation()
       const word = extractWordFromClick(event, paragraph.spanish)
       if (word) {
-        handleWordClick(word)
+        handleWordClick(word, paragraph.spanish)
       }
     }
 
@@ -839,6 +1012,8 @@ export default function LanguageReader({
     }
 
     const currentWord = wordTranslationResult?.word ?? activeWord
+    const canShowConjugations = isVerbType(wordType)
+    const activeConjugations = conjugations?.[activeConjugationTense] ?? []
 
     return (
       <div
@@ -848,67 +1023,198 @@ export default function LanguageReader({
         )}
         aria-live="polite"
       >
-        <div className="pointer-events-auto w-full border-t border-border/60 bg-background/95 shadow-lg backdrop-blur">
-          <div className="relative px-4 py-2 sm:px-6">
-            <div className="mx-auto flex max-w-2xl flex-col items-center space-y-1 px-4 text-center sm:px-8">
-              <button
-                type="button"
-                onClick={handleBarExpand}
-                className="w-full py-2 hover:bg-muted/30 transition-colors rounded-md cursor-pointer"
-                aria-label={isWordBarExpanded ? "Collapse definition" : "Expand definition"}
-              >
-                <div className="h-0.5 w-12 mx-auto bg-muted-foreground/40 rounded-full" />
-              </button>
-              <div className="text-center">
-                <p className="font-serif text-lg font-light text-muted-foreground">
-                  {currentWord ?? "Tap a word"}
-                </p>
-                {isWordTranslationLoading ? (
-                  <div className="flex items-center justify-center gap-2 mt-1">
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
-                    <span className="text-lg font-light text-muted-foreground/90">Translating…</span>
-                  </div>
-                ) : wordTranslationResult?.translation ? (
-                  <p className="font-serif text-lg font-light text-muted-foreground/90 mt-1">
-                    {wordTranslationResult.translation}
-                  </p>
-                ) : null}
-                <div
-                  className={cn(
-                    "overflow-hidden transition-all duration-300 ease-out",
-                    isWordBarExpanded ? "max-h-96 opacity-100 mt-2" : "max-h-0 opacity-0",
-                  )}
+        <div 
+          className="pointer-events-auto w-full border-t border-border/60 bg-background/95 shadow-lg backdrop-blur"
+          style={{ 
+            maxHeight: isWordBarExpanded ? '600px' : 'auto',
+            transition: 'max-height 0.2s ease-out',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}
+        >
+          {!isWordBarExpanded ? (
+            <div className="relative px-4 py-2 sm:px-6">
+              <div className="mx-auto flex max-w-2xl flex-col items-center space-y-1 px-4 text-center sm:px-8">
+                <button
+                  type="button"
+                  onClick={() => setIsWordBarExpanded(true)}
+                  className="w-full py-2 hover:bg-muted/30 transition-colors rounded-md cursor-pointer mb-1"
+                  aria-label="Expand options"
                 >
-                {isWordDefinitionLoading ? (
-                    <div className="flex items-center justify-center gap-2 py-2">
+                  <div className="h-1 w-12 mx-auto bg-muted-foreground/20 rounded-full" />
+                </button>
+                <div className="text-center w-full pb-2">
+                  <p className="font-serif text-lg font-light text-muted-foreground">
+                    {currentWord ?? "Tap a word"}
+                  </p>
+                  {isWordTranslationLoading ? (
+                    <div className="flex items-center justify-center gap-2 mt-1">
                       <Loader2 className="h-4 w-4 animate-spin text-muted-foreground/90" />
-                      <span className="text-sm font-light text-muted-foreground/90">Loading definition…</span>
+                      <span className="text-lg font-light text-muted-foreground/90">Translating…</span>
                     </div>
-                  ) : wordDefinitionError ? (
-                    <p className="text-xs font-medium text-destructive py-2">{wordDefinitionError}</p>
-                  ) : wordDefinition ? (
-                    <div className="py-2 text-center">
-                      <p className="font-serif text-base font-light text-muted-foreground/70 leading-relaxed">
-                        {wordDefinition}
-                      </p>
-                    </div>
+                  ) : wordTranslationResult?.translation ? (
+                    <p className="font-serif text-xl font-medium text-foreground mt-1">
+                      {wordTranslationResult.translation}
+                    </p>
                   ) : null}
                 </div>
               </div>
-              {wordTranslationError && (
-                <p className="text-center text-xs font-medium text-destructive">{wordTranslationError}</p>
-              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="absolute right-4 top-3 h-7 w-7 rounded-full hover:bg-destructive/10 hover:text-destructive sm:right-6 sm:top-3"
+                onClick={closeWordBar}
+                aria-label="Close translation bar"
+              >
+                <X className="h-3 w-3" />
+              </Button>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-4 top-3 h-7 w-7 rounded-full hover:bg-destructive/10 hover:text-destructive sm:right-6 sm:top-3"
-              onClick={closeWordBar}
-              aria-label="Close translation bar"
-            >
-              <X className="h-3 w-3" />
-            </Button>
-          </div>
+          ) : (
+            <div className="flex flex-col h-[500px]">
+               <div className="relative pr-14 px-4 py-4 border-b bg-card/30">
+                 <div className="flex justify-center gap-2 mb-4">
+                   {["translation", "definition", "conjugation"].map((tab) => {
+                     const isConjugationTab = tab === "conjugation"
+                     const disabled = isConjugationTab && !canShowConjugations
+                     const isActive = activeTab === tab
+                     return (
+                       <Button
+                         key={tab}
+                         variant={isActive ? "secondary" : "ghost"}
+                         size="sm"
+                         disabled={disabled}
+                         onClick={() => {
+                           if (disabled) {
+                             return
+                           }
+                           setActiveTab(tab)
+                         }}
+                         className={cn(
+                           "capitalize min-w-[90px] transition-all",
+                           isActive
+                             ? "font-medium shadow-sm"
+                             : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                           disabled ? "cursor-not-allowed opacity-60" : "",
+                         )}
+                         title={
+                           isConjugationTab && !canShowConjugations
+                             ? "Conjugations are available for verbs."
+                             : undefined
+                         }
+                       >
+                         {tab}
+                       </Button>
+                     )
+                   })}
+                 </div>
+                 
+                 {activeTab === "conjugation" && (
+                    <div className="flex flex-wrap justify-center gap-2 pb-1 px-2 pt-2 border-t border-border/40">
+                      {CONJUGATION_TENSES.map((tense) => (
+                        <Button
+                          key={tense}
+                          variant={activeConjugationTense === tense ? "secondary" : "ghost"}
+                          size="sm"
+                          onClick={() => setActiveConjugationTense(tense)}
+                          className={cn(
+                            "capitalize text-xs h-7 min-w-[80px] transition-all",
+                            activeConjugationTense === tense 
+                              ? "bg-secondary/80 text-secondary-foreground font-medium shadow-sm" 
+                              : "text-muted-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                          )}
+                        >
+                          {tense}
+                        </Button>
+                      ))}
+                    </div>
+                 )}
+
+                 <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-4 top-4 h-7 w-7 rounded-full hover:bg-destructive/10 hover:text-destructive"
+                    onClick={closeWordBar}
+                    aria-label="Close translation bar"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+               </div>
+
+               <div className="flex-1 overflow-y-auto p-4 bg-muted/5">
+                 <div className="mx-auto max-w-2xl text-center">
+                   {activeTab === "translation" && (
+                     <div className="space-y-4 py-8">
+                       <div>
+                         <h3 className="text-sm font-medium text-muted-foreground mb-1">Word</h3>
+                         <p className="text-2xl font-serif">{currentWord}</p>
+                       </div>
+                       <div>
+                         <h3 className="text-sm font-medium text-muted-foreground mb-1">Translation</h3>
+                         {isWordTranslationLoading ? (
+                            <Loader2 className="h-4 w-4 animate-spin mx-auto text-muted-foreground" />
+                         ) : (
+                          <>
+                            <p className="text-2xl font-serif font-medium">{wordTranslationResult?.translation}</p>
+                            {wordType && (
+                              <p className="text-sm text-muted-foreground/70 mt-1 italic">{wordType}</p>
+                            )}
+                          </>
+                        )}
+                       </div>
+                     </div>
+                   )}
+
+                   {activeTab === "definition" && (
+                     <div className="py-4">
+                       {isWordDefinitionLoading ? (
+                         <div className="flex flex-col items-center justify-center gap-2 py-8">
+                           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/90" />
+                           <span className="text-sm font-light text-muted-foreground/90">Loading definition…</span>
+                         </div>
+                       ) : wordDefinitionError ? (
+                         <p className="text-sm font-medium text-destructive py-2">{wordDefinitionError}</p>
+                       ) : wordDefinition ? (
+                         <div className="text-center space-y-4">
+                           <p className="font-serif text-lg font-light text-muted-foreground/80 leading-relaxed max-w-lg mx-auto">
+                             {wordDefinition}
+                           </p>
+                         </div>
+                       ) : (
+                         <p className="text-sm text-muted-foreground">No definition available.</p>
+                       )}
+                     </div>
+                   )}
+
+                   {activeTab === "conjugation" && (
+                     <div className="relative py-2 text-left max-w-md mx-auto">
+                       {isConjugationLoading && (
+                         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-lg bg-background/80 backdrop-blur-sm">
+                           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground/90" />
+                           <span className="text-xs font-medium text-muted-foreground/80">Fetching conjugations…</span>
+                         </div>
+                       )}
+                       <h4 className="font-medium capitalize text-muted-foreground mb-4 text-center text-lg">{activeConjugationTense}</h4>
+                       {conjugationError ? (
+                         <p className="text-sm font-medium text-destructive text-center">{conjugationError}</p>
+                       ) : activeConjugations.length > 0 ? (
+                         <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-base">
+                           {activeConjugations.map((item, i) => (
+                             <div key={`${item.pronoun}-${i}`} className="contents">
+                               <span className="text-muted-foreground/60 text-right">{item.pronoun}</span>
+                               <span className="font-medium text-foreground/80">{item.form}</span>
+                             </div>
+                           ))}
+                         </div>
+                       ) : !isConjugationLoading ? (
+                         <p className="text-sm text-muted-foreground text-center">No conjugations available yet.</p>
+                       ) : null}
+                     </div>
+                   )}
+                 </div>
+               </div>
+            </div>
+          )}
         </div>
       </div>
     )
