@@ -48,7 +48,7 @@ const MAX_VISIBLE_TRANSLATIONS = 5
 const LOAD_MORE_THRESHOLD = 4
 const MAX_WORD_TRANSLATION_CACHE_SIZE = 100
 const MAX_CONJUGATION_CACHE_SIZE = 50
-const DEFAULT_FONT_SIZE = 14
+const DEFAULT_FONT_SIZE = 16
 const MIN_FONT_SIZE = 10
 const MAX_FONT_SIZE = 24
 const CONJUGATION_TENSES: ConjugationTense[] = [
@@ -66,13 +66,6 @@ const buildEmptyConjugations = (): ConjugationsByTense =>
     acc[tense] = []
     return acc
   }, {} as ConjugationsByTense)
-const isVerbType = (type?: string | null) => {
-  if (!type) {
-    return false
-  }
-  const normalized = type.trim().toLowerCase()
-  return /^verb(?:\b|$)/.test(normalized) || /^verbo(?:\b|$)/.test(normalized)
-}
 
 export const defaultParagraphs: Paragraph[] = [
   {
@@ -281,6 +274,11 @@ type WordTranslationResult = {
   translation: string
 }
 
+type WordSelection = {
+  word: string
+  sentence?: string
+}
+
 type LanguageReaderProps = {
   title?: string
   subtitle?: string | null
@@ -318,7 +316,6 @@ export default function LanguageReader({
   const [isWordBarExpanded, setIsWordBarExpanded] = useState(false)
   const [wordContextSentence, setWordContextSentence] = useState<string | null>(null)
   const [wordDefinition, setWordDefinition] = useState<string | null>(null)
-  const [wordType, setWordType] = useState<string | null>(null)
   const [isWordDefinitionLoading, setIsWordDefinitionLoading] = useState(false)
   const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
   const [readerFontSize, setReaderFontSize] = useState(DEFAULT_FONT_SIZE)
@@ -329,6 +326,8 @@ export default function LanguageReader({
   const [activeConjugationTense, setActiveConjugationTense] =
     useState<ConjugationTense>("present")
   const [conjugations, setConjugations] = useState<ConjugationsByTense | null>(null)
+  const [lastConjugatedWord, setLastConjugatedWord] = useState<string | null>(null)
+  const [nonConjugatableWords, setNonConjugatableWords] = useState<Set<string>>(new Set())
   const [isConjugationLoading, setIsConjugationLoading] = useState(false)
   const [conjugationError, setConjugationError] = useState<string | null>(null)
   const wordTranslationsCacheRef = useRef<Map<string, WordTranslationResult>>(new Map())
@@ -342,7 +341,6 @@ export default function LanguageReader({
   const translateParagraphAction = useAction(api.translations.translateParagraph)
   const translateWordAction = useAction(api.translations.translateWord)
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
-  const lookupWordTypeAction = useAction(api.translations.lookupWordType)
   const lookupVerbConjugationsAction = useAction(api.translations.lookupVerbConjugations)
   const headerRef = useRef<HTMLElement | null>(null)
   const fontMenuRef = useRef<HTMLDivElement | null>(null)
@@ -535,9 +533,18 @@ export default function LanguageReader({
         return
       }
 
+      const normalizedWord = word.toLowerCase()
+      if (nonConjugatableWords.has(normalizedWord)) {
+        setIsConjugationLoading(false)
+        setConjugations(null)
+        setConjugationError("This word is not a verb, so conjugations are unavailable.")
+        setLastConjugatedWord(word)
+        return
+      }
+
       conjugationRequestIdRef.current += 1
       const requestId = conjugationRequestIdRef.current
-      const cacheKey = word.toLowerCase()
+      const cacheKey = normalizedWord
       const cache = conjugationCacheRef.current
       const cached = cache.get(cacheKey)
       setConjugationError(null)
@@ -548,6 +555,7 @@ export default function LanguageReader({
         if (isMountedRef.current && conjugationRequestIdRef.current === requestId) {
           setIsConjugationLoading(false)
           setConjugations(cached)
+          setLastConjugatedWord(word)
         }
         return
       }
@@ -567,6 +575,22 @@ export default function LanguageReader({
       try {
         const result = await lookupVerbConjugationsAction({ word })
         if (!isMountedRef.current || conjugationRequestIdRef.current !== requestId) {
+          return
+        }
+
+        if (result?.error) {
+          setNonConjugatableWords((prev) => {
+            const next = new Set(prev)
+            next.add(normalizedWord)
+            return next
+          })
+          setConjugationError(
+            typeof result.error === "string"
+              ? result.error
+              : "Conjugations are unavailable for this word.",
+          )
+          setConjugations(null)
+          setLastConjugatedWord(word)
           return
         }
 
@@ -603,6 +627,7 @@ export default function LanguageReader({
           }
         }
         setConjugations(normalized)
+        setLastConjugatedWord(word)
       } catch (error) {
         if (!isMountedRef.current || conjugationRequestIdRef.current !== requestId) {
           return
@@ -617,7 +642,7 @@ export default function LanguageReader({
         }
       }
     },
-    [lookupVerbConjugationsAction, online],
+    [lookupVerbConjugationsAction, online, nonConjugatableWords],
   )
 
   const fetchWordDefinition = useCallback(async (word: string, sentence?: string) => {
@@ -638,26 +663,13 @@ export default function LanguageReader({
     setIsWordDefinitionLoading(true)
 
     try {
-      const definitionPromise = lookupWordDefinitionAction({ word, sentence })
-      const typePromise = lookupWordTypeAction({ word, sentence }).catch(() => null)
-
-      const [definitionResult, typeResult] = await Promise.all([definitionPromise, typePromise])
+      const definitionResult = await lookupWordDefinitionAction({ word, sentence })
 
       if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
         return
       }
 
-      const resolvedType = typeResult?.type || null
       setWordDefinition(definitionResult.definition)
-      setWordType(resolvedType)
-
-      if (isVerbType(resolvedType)) {
-        void fetchWordConjugations(word)
-      } else {
-        setConjugations(null)
-        setConjugationError(null)
-        setIsConjugationLoading(false)
-      }
     } catch (error) {
       if (!isMountedRef.current || wordDefinitionRequestIdRef.current !== requestId) {
         return
@@ -666,22 +678,19 @@ export default function LanguageReader({
         error instanceof Error ? error.message : "Unable to fetch definition right now."
       setWordDefinitionError(message)
       setWordDefinition(null)
-      setWordType(null)
-      setConjugations(null)
-      setConjugationError(null)
-      setIsConjugationLoading(false)
     } finally {
       if (isMountedRef.current && wordDefinitionRequestIdRef.current === requestId) {
         setIsWordDefinitionLoading(false)
       }
     }
-  }, [lookupWordDefinitionAction, lookupWordTypeAction, fetchWordConjugations, online])
+  }, [lookupWordDefinitionAction, online])
 
-  const fetchWordTranslation = useCallback(async (word: string) => {
+  const fetchWordTranslation = useCallback(async (word: string, sentence?: string) => {
     if (!word) {
       return
     }
 
+    const contextSentence = sentence?.trim() || wordContextSentence || undefined
     wordTranslationRequestIdRef.current += 1
     const requestId = wordTranslationRequestIdRef.current
 
@@ -697,7 +706,7 @@ export default function LanguageReader({
         setIsWordTranslationLoading(false)
         setWordTranslationResult(cached)
         if (!wordDefinition) {
-          void fetchWordDefinition(word, wordContextSentence ?? undefined)
+          void fetchWordDefinition(word, contextSentence)
         }
       }
       return
@@ -735,7 +744,7 @@ export default function LanguageReader({
       }
       setWordTranslationResult(payload)
 
-      void fetchWordDefinition(word, wordContextSentence ?? undefined)
+      void fetchWordDefinition(word, contextSentence)
     } catch (error) {
       if (!isMountedRef.current || wordTranslationRequestIdRef.current !== requestId) {
         return
@@ -861,88 +870,103 @@ export default function LanguageReader({
 
   const handleWordClick = useCallback((word: string, sentence?: string) => {
     const cleanWord = word.replace(/[.,;:!?"""¿¡]/g, "")
+    const normalizedSentence = sentence?.trim() || undefined
     if (!cleanWord) {
       return
     }
 
     setActiveWord(cleanWord)
-    setWordContextSentence(sentence ?? null)
+    setWordContextSentence(normalizedSentence ?? null)
     setIsWordBarVisible(true)
     setIsWordBarExpanded(false)
     setActiveTab("translation")
     setActiveConjugationTense("present")
     setWordDefinition(null)
-    setWordType(null)
     setWordDefinitionError(null)
     setConjugations(null)
     setConjugationError(null)
     setIsConjugationLoading(false)
     wordDefinitionRequestIdRef.current += 1
     conjugationRequestIdRef.current += 1
-    void fetchWordTranslation(cleanWord)
+    void fetchWordTranslation(cleanWord, normalizedSentence)
   }, [fetchWordTranslation])
 
-  const extractWordFromClick = useCallback((event: React.MouseEvent<HTMLElement>, text: string) => {
-    // Get the text node and character offset at click position
-    const range = document.caretRangeFromPoint?.(event.clientX, event.clientY)
-    
-    if (!range) {
-      // Fallback: try to get selection
-      const selection = window.getSelection()
-      if (selection && selection.rangeCount > 0) {
-        const selRange = selection.getRangeAt(0)
-        if (selRange.startContainer.nodeType === Node.TEXT_NODE) {
-          const textNode = selRange.startContainer as Text
-          const offset = selRange.startOffset
-          const textContent = textNode.textContent || text
-          
-          // Find word boundaries around the offset
-          let start = offset
-          let end = offset
-          
-          // Move start backwards to word boundary (non-whitespace)
-          while (start > 0 && /\S/.test(textContent[start - 1])) {
-            start--
-          }
-          
-          // Move end forwards to word boundary
-          while (end < textContent.length && /\S/.test(textContent[end])) {
-            end++
-          }
-          
-          const word = textContent.slice(start, end).trim()
-          return word ? word.replace(/[.,;:!?"""¿¡]/g, "") : null
+  const extractWordFromClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>, text: string): WordSelection | null => {
+      const getWordSelection = (textContent: string, offset: number): WordSelection | null => {
+        let start = offset
+        let end = offset
+
+        // Move start backwards to word boundary
+        while (start > 0 && /\S/.test(textContent[start - 1])) {
+          start--
         }
+
+        // Move end forwards to word boundary
+        while (end < textContent.length && /\S/.test(textContent[end])) {
+          end++
+        }
+
+        const rawWord = textContent.slice(start, end).trim()
+        const word = rawWord ? rawWord.replace(/[.,;:!?"""¿¡]/g, "") : ""
+        if (!word) {
+          return null
+        }
+
+        // Extract the sentence containing the word (delimited by common punctuation).
+        const delimiter = /[.!?¡¿]/
+        let sentenceStart = start
+        while (sentenceStart > 0 && !delimiter.test(textContent[sentenceStart - 1])) {
+          sentenceStart--
+        }
+        while (sentenceStart < textContent.length && /\s/.test(textContent[sentenceStart])) {
+          sentenceStart++
+        }
+
+        let sentenceEnd = end
+        while (sentenceEnd < textContent.length) {
+          if (delimiter.test(textContent[sentenceEnd])) {
+            sentenceEnd++
+            break
+          }
+          sentenceEnd++
+        }
+        while (sentenceEnd > sentenceStart && /\s/.test(textContent[sentenceEnd - 1])) {
+          sentenceEnd--
+        }
+
+        const sentence = textContent.slice(sentenceStart, sentenceEnd).trim()
+
+        return { word, sentence: sentence || undefined }
       }
-      return null
-    }
-    
-    // Use range to find the character position
-    const textNode = range.startContainer
-    if (textNode.nodeType !== Node.TEXT_NODE) {
-      return null
-    }
-    
-    const textContent = textNode.textContent || text
-    const offset = range.startOffset
-    
-    // Find word boundaries
-    let start = offset
-    let end = offset
-    
-    // Move start backwards to word boundary
-    while (start > 0 && /\S/.test(textContent[start - 1])) {
-      start--
-    }
-    
-    // Move end forwards to word boundary
-    while (end < textContent.length && /\S/.test(textContent[end])) {
-      end++
-    }
-    
-    const word = textContent.slice(start, end).trim()
-    return word ? word.replace(/[.,;:!?"""¿¡]/g, "") : null
-  }, [])
+
+      // Get the text node and character offset at click position
+      const range = document.caretRangeFromPoint?.(event.clientX, event.clientY)
+      if (!range) {
+        const selection = window.getSelection()
+        if (selection && selection.rangeCount > 0) {
+          const selRange = selection.getRangeAt(0)
+          if (selRange.startContainer.nodeType === Node.TEXT_NODE) {
+            const textNode = selRange.startContainer as Text
+            const offset = selRange.startOffset
+            const textContent = textNode.textContent || text
+            return getWordSelection(textContent, offset)
+          }
+        }
+        return null
+      }
+
+      const textNode = range.startContainer
+      if (textNode.nodeType !== Node.TEXT_NODE) {
+        return null
+      }
+
+      const textContent = textNode.textContent || text
+      const offset = range.startOffset
+      return getWordSelection(textContent, offset)
+    },
+    [],
+  )
 
   const handleBarExpand = () => {
     setIsWordBarExpanded(true)
@@ -959,12 +983,12 @@ export default function LanguageReader({
     setWordTranslationError(null)
     setWordDefinition(null)
     setWordContextSentence(null)
-    setWordType(null)
     setWordDefinitionError(null)
     setConjugations(null)
     setConjugationError(null)
     setIsConjugationLoading(false)
     setActiveConjugationTense("present")
+    setLastConjugatedWord(null)
     wordTranslationRequestIdRef.current += 1
     wordDefinitionRequestIdRef.current += 1
     conjugationRequestIdRef.current += 1
@@ -987,9 +1011,9 @@ export default function LanguageReader({
 
     const handleTextClick = (event: React.MouseEvent<HTMLElement>) => {
       event.stopPropagation()
-      const word = extractWordFromClick(event, paragraph.spanish)
-      if (word) {
-        handleWordClick(word, paragraph.spanish)
+      const selection = extractWordFromClick(event, paragraph.spanish)
+      if (selection) {
+        handleWordClick(selection.word, selection.sentence)
       }
     }
 
@@ -1012,7 +1036,6 @@ export default function LanguageReader({
     }
 
     const currentWord = wordTranslationResult?.word ?? activeWord
-    const canShowConjugations = isVerbType(wordType)
     const activeConjugations = conjugations?.[activeConjugationTense] ?? []
 
     return (
@@ -1075,33 +1098,29 @@ export default function LanguageReader({
                <div className="relative pr-14 px-4 py-4 border-b bg-card/30">
                  <div className="flex justify-center gap-2 mb-4">
                    {["translation", "definition", "conjugation"].map((tab) => {
-                     const isConjugationTab = tab === "conjugation"
-                     const disabled = isConjugationTab && !canShowConjugations
                      const isActive = activeTab === tab
                      return (
                        <Button
                          key={tab}
                          variant={isActive ? "secondary" : "ghost"}
                          size="sm"
-                         disabled={disabled}
                          onClick={() => {
-                           if (disabled) {
-                             return
-                           }
                            setActiveTab(tab)
+                           if (tab === "conjugation") {
+                             const targetWord = wordTranslationResult?.word ?? activeWord
+                             if (targetWord) {
+                               void fetchWordConjugations(targetWord)
+                             } else {
+                               setConjugationError("Select a word to see conjugations.")
+                             }
+                           }
                          }}
                          className={cn(
                            "capitalize min-w-[90px] transition-all",
                            isActive
                              ? "font-medium shadow-sm"
                              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                           disabled ? "cursor-not-allowed opacity-60" : "",
                          )}
-                         title={
-                           isConjugationTab && !canShowConjugations
-                             ? "Conjugations are available for verbs."
-                             : undefined
-                         }
                        >
                          {tab}
                        </Button>
@@ -1154,11 +1173,8 @@ export default function LanguageReader({
                          {isWordTranslationLoading ? (
                             <Loader2 className="h-4 w-4 animate-spin mx-auto text-muted-foreground" />
                          ) : (
-                          <>
-                            <p className="text-2xl font-serif font-medium">{wordTranslationResult?.translation}</p>
-                            {wordType && (
-                              <p className="text-sm text-muted-foreground/70 mt-1 italic">{wordType}</p>
-                            )}
+                         <>
+                           <p className="text-2xl font-serif font-medium">{wordTranslationResult?.translation}</p>
                           </>
                         )}
                        </div>

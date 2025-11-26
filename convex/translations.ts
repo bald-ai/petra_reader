@@ -287,6 +287,29 @@ export const lookupWordType = action({
     const MODEL = "google/gemini-2.5-flash";
     const LANGUAGE = "spanish";
 
+    const typeInstruction =
+      "Return only the English part of speech for the target word. Respond strictly with JSON matching desired_output.";
+    const typeUserPrompt = JSON.stringify(
+      {
+        instruction: typeInstruction,
+        input: contextSentence
+          ? {
+              sentence: contextSentence,
+              word: text,
+            }
+          : {
+              word: text,
+              language: LANGUAGE,
+            },
+        desired_output: {
+          word: text,
+          type: "<english part of speech>",
+        },
+      },
+      null,
+      2,
+    );
+
     try {
       const response = await fetch(OPENROUTER_API_URL, {
         method: "POST",
@@ -299,15 +322,10 @@ export const lookupWordType = action({
               content:
                 "You are a language part-of-speech API. Respond only with valid JSON containing the part of speech in English (noun, verb, adjective, etc.).",
             },
-            contextSentence
-              ? {
-                  role: "user",
-                  content: `Given the sentence: "${contextSentence}", return only the part of speech (noun, verb, adjective, etc.) for the target word "${text}" as it is used in that sentence. Return JSON: {"word":"${text}","type":"<english part of speech>"} and nothing else.`,
-                }
-              : {
-                  role: "user",
-                  content: `Return only the part of speech (noun, verb, adjective, etc.) for the word "${text}" in ${LANGUAGE}. Return JSON: {"word":"${text}","type":"<english part of speech>"} and nothing else.`,
-                },
+            {
+              role: "user",
+              content: typeUserPrompt,
+            },
           ],
           response_format: { type: "json_object" },
           temperature: 0.1,
@@ -353,34 +371,65 @@ export const lookupVerbConjugations = action({
       throw new Error("Cannot conjugate an empty word.");
     }
 
-    const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-    if (!apiKey) {
-      throw new Error("OpenRouter API key (OPENROUTER_API_KEY) is not configured.");
-    }
+  const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("OpenRouter API key (OPENROUTER_API_KEY) is not configured.");
+  }
 
-    try {
-      const response = await fetch(OPENROUTER_API_URL, {
-        method: "POST",
-        headers: buildOpenRouterHeaders(apiKey),
-        body: JSON.stringify({
-          model: "openai/gpt-5.1",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are a Spanish verb conjugation API. Respond only with valid JSON that matches the requested shape.",
-            },
-            {
-              role: "user",
-              content: `Provide Spanish conjugations for the verb "${text}" in these tenses: ${CONJUGATION_TENSES.join(
-                ", ",
-              )}. Use the pronouns: yo, tú, él/ella/usted, nosotros/nosotras, vosotros/vosotras, ellos/ellas/ustedes. Return a JSON object where each tense key maps to an array of objects with "pronoun" and "form" (no extra text). If the word is not a verb, respond with {"error":"not a verb"}.`,
-            },
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.2,
-          max_tokens: 0,
-          include_reasoning: false,
+  const conjugationInstruction =
+    "Return Spanish conjugations for the requested verb. If the word is not a verb or cannot be conjugated, return an error message instead of conjugations.";
+  const conjugationUserPrompt = JSON.stringify(
+    {
+      instruction: conjugationInstruction,
+      input: {
+        word: text,
+        tenses: CONJUGATION_TENSES,
+        pronouns: [
+          "yo",
+          "tú",
+          "él/ella/usted",
+          "nosotros/nosotras",
+          "vosotros/vosotras",
+          "ellos/ellas/ustedes",
+        ],
+      },
+      desired_output: {
+        present: [{ pronoun: "yo", form: "<verb form>" }],
+        preterite: [{ pronoun: "yo", form: "<verb form>" }],
+        imperfect: [{ pronoun: "yo", form: "<verb form>" }],
+        conditional: [{ pronoun: "yo", form: "<verb form>" }],
+        future: [{ pronoun: "yo", form: "<verb form>" }],
+        error: {
+          code: "not_a_verb",
+          message: "This word is not a verb, so conjugations are unavailable.",
+        },
+      },
+    },
+    null,
+    2,
+  );
+
+  try {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: "POST",
+      headers: buildOpenRouterHeaders(apiKey),
+      body: JSON.stringify({
+        model: "openai/gpt-5.1",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a Spanish verb conjugation API. Respond only with valid JSON that matches the requested shape.",
+          },
+          {
+            role: "user",
+            content: conjugationUserPrompt,
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+        max_tokens: 0,
+        include_reasoning: false,
           reasoning: {
             effort: "none",
           },
@@ -402,7 +451,13 @@ export const lookupVerbConjugations = action({
 
       const parsed = JSON.parse(content);
       if (parsed?.error) {
-        throw new Error("This word cannot be conjugated.");
+        const errorMessage =
+          typeof parsed.error === "string"
+            ? parsed.error
+            : typeof parsed.error?.message === "string"
+              ? parsed.error.message
+              : "This word is not a verb, so conjugations are unavailable.";
+        return { error: errorMessage };
       }
 
       const conjugations = createEmptyConjugations();
