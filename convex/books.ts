@@ -2,7 +2,7 @@ import { mutation, query, internalMutation } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const sortByValidator = v.optional(
   v.union(v.literal("title"), v.literal("recent")),
@@ -230,24 +230,6 @@ export const list = query({
   },
 });
 
-export const listUnprocessed = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUser(ctx);
-    if (!user) {
-      return [];
-    }
-    const books = await ctx.db
-      .query("books")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
-    
-    return books.filter(
-      (book) => !book.processingStatus || book.processingStatus === "pending" || book.processingStatus === "failed",
-    );
-  },
-});
-
 export const getFileUrl = query({
   args: {
     bookId: v.id("books"),
@@ -290,17 +272,10 @@ export const remove = mutation({
       throw new Error("Unauthorized");
     }
 
-    const chunks = await ctx.db
-      .query("bookChunks")
-      .withIndex("by_book", (q) => q.eq("bookId", bookId))
-      .collect();
-
-    for (const chunk of chunks) {
-      await ctx.db.delete(chunk._id);
-    }
-
+    // Delete the book record immediately
     await ctx.db.delete(bookId);
 
+    // Delete storage file
     if (book.storageId) {
       try {
         await ctx.storage.delete(book.storageId);
@@ -308,6 +283,11 @@ export const remove = mutation({
         console.warn("Failed to delete book file from storage:", error);
       }
     }
+
+    // Schedule background job to delete chunks in batches
+    await ctx.scheduler.runAfter(0, internal.books.deleteChunksBatch, {
+      bookId,
+    });
 
     return { success: true };
   },
@@ -448,5 +428,30 @@ export const getChunks = query({
         chunkIndex: chunk.chunkIndex,
         paragraphs: chunk.paragraphs,
       }));
+  },
+});
+
+const DELETE_BATCH_SIZE = 100;
+
+export const deleteChunksBatch = internalMutation({
+  args: {
+    bookId: v.id("books"),
+  },
+  handler: async (ctx, { bookId }) => {
+    const chunks = await ctx.db
+      .query("bookChunks")
+      .withIndex("by_book", (q) => q.eq("bookId", bookId))
+      .take(DELETE_BATCH_SIZE);
+
+    for (const chunk of chunks) {
+      await ctx.db.delete(chunk._id);
+    }
+
+    // If we deleted a full batch, there might be more - schedule another run
+    if (chunks.length === DELETE_BATCH_SIZE) {
+      await ctx.scheduler.runAfter(0, internal.books.deleteChunksBatch, {
+        bookId,
+      });
+    }
   },
 });

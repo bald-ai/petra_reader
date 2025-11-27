@@ -3,7 +3,7 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
-import { extractParagraphsFromEpub, streamParagraphsFromEpub } from "./utils/epub";
+import { streamParagraphsFromEpub } from "./utils/epub";
 
 const CHUNK_SIZE = 50;
 const CHUNK_FLUSH_BATCH = 4;
@@ -100,63 +100,5 @@ export const processBook = action({
       });
       throw error;
     }
-  },
-});
-
-export const migrateExistingBooks = action({
-  args: {},
-  handler: async (ctx): Promise<Array<{ bookId: string; status: string; error?: string }>> => {
-    const books = await ctx.runQuery(api.books.listUnprocessed);
-    const results: Array<{ bookId: string; status: string; error?: string }> = [];
-
-    for (const book of books) {
-      try {
-        await ctx.runAction(api.bookContent.processBook, { bookId: book._id });
-        results.push({ bookId: book._id, status: "success" });
-      } catch (error) {
-        results.push({
-          bookId: book._id,
-          status: "failed",
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-      }
-    }
-
-    return results;
-  },
-});
-
-export const content = action({
-  args: {
-    bookId: v.id("books"),
-    limit: v.optional(v.number()),
-  },
-  handler: async (ctx, { bookId, limit }) => {
-    const book = await ctx.runQuery(api.books.get, { bookId });
-    if (!book.storageId) {
-      throw new Error("This book is missing file storage. Please re-upload.");
-    }
-
-    const fileBlob = await ctx.storage.get(book.storageId);
-    if (!fileBlob) {
-      throw new Error("Unable to load book file from storage.");
-    }
-    const fileBuffer = await fileBlob.arrayBuffer();
-
-    const normalizedLimit =
-      typeof limit === "number" && limit > 0 ? Math.min(limit, 1000) : undefined;
-    const paragraphs = await extractParagraphsFromEpub(fileBuffer, {
-      maxParagraphs: normalizedLimit,
-    });
-
-    return {
-      bookId,
-      paragraphs,
-      paragraphCount: paragraphs.length,
-      hasMore:
-        normalizedLimit !== undefined
-          ? paragraphs.length >= normalizedLimit
-          : false,
-    };
   },
 });
