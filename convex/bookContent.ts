@@ -3,7 +3,7 @@
 import { action } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
-import { streamParagraphsFromEpub } from "./utils/epub";
+import { ParsedChapter, streamParagraphsFromEpub } from "./utils/epub";
 
 const CHUNK_SIZE = 50;
 const CHUNK_FLUSH_BATCH = 4;
@@ -45,6 +45,7 @@ export const processBook = action({
       let totalChunks = 0;
       let chunkParagraphs: Array<{ id: number; text: string }> = [];
       const chunkBuffer: Array<{ chunkIndex: number; paragraphs: Array<{ id: number; text: string }> }> = [];
+      let extractedChapters: ParsedChapter[] = [];
 
       const flushChunks = async () => {
         if (chunkBuffer.length === 0) {
@@ -72,7 +73,7 @@ export const processBook = action({
         }
       };
 
-      await streamParagraphsFromEpub(fileBuffer, async (paragraph) => {
+      const { chapters } = await streamParagraphsFromEpub(fileBuffer, async (paragraph) => {
         chunkParagraphs.push(paragraph);
         if (chunkParagraphs.length >= CHUNK_SIZE) {
           const completedChunk = chunkParagraphs;
@@ -81,6 +82,8 @@ export const processBook = action({
         }
       });
 
+      extractedChapters = chapters;
+
       if (chunkParagraphs.length > 0) {
         await queueChunk(chunkParagraphs);
         chunkParagraphs = [];
@@ -88,10 +91,24 @@ export const processBook = action({
 
       await flushChunks();
 
+      const finalizedChapters =
+        extractedChapters.length > 0
+          ? extractedChapters
+          : totalChunks > 0
+            ? [
+                {
+                  index: 0,
+                  title: (book.title ?? "Full book").trim() || "Full book",
+                  startParagraphId: 1,
+                },
+              ]
+            : [];
+
       await ctx.runMutation(internal.books.updateProcessingStatus, {
         bookId,
         status: "completed",
         totalChunks,
+        chapters: finalizedChapters,
       });
     } catch (error) {
       await ctx.runMutation(internal.books.updateProcessingStatus, {

@@ -9,6 +9,11 @@ const sortByValidator = v.optional(
 );
 
 type SortBy = "title" | "recent";
+type ChapterInfo = {
+  index: number;
+  title: string;
+  startParagraphId: number;
+};
 
 async function getCurrentUserOrCreate(ctx: MutationCtx) {
   const identity = await ctx.auth.getUserIdentity();
@@ -95,6 +100,7 @@ export const create = mutation({
       userId: user._id,
       processingStatus: "pending",
       totalChunks: 0,
+      chapters: [],
     });
 
     ctx.scheduler.runAfter(0, api.bookContent.processBook, { bookId });
@@ -157,6 +163,7 @@ type BookDetails = BookListItem & {
   processingStatus?: "pending" | "processing" | "completed" | "failed";
   totalChunks?: number;
   lastReadParagraphId?: number | null;
+  chapters?: ChapterInfo[];
 };
 
 function sanitizeBookForList(book: Doc<"books">): BookListItem | null {
@@ -188,6 +195,7 @@ function sanitizeBookDetails(book: Doc<"books">): BookDetails {
     processingStatus: book.processingStatus,
     totalChunks: book.totalChunks,
     lastReadParagraphId: book.lastReadParagraphId ?? null,
+    chapters: book.chapters ?? [],
   };
 }
 
@@ -351,13 +359,25 @@ export const updateProcessingStatus = internalMutation({
     bookId: v.id("books"),
     status: v.union(v.literal("pending"), v.literal("processing"), v.literal("completed"), v.literal("failed")),
     totalChunks: v.optional(v.number()),
+    chapters: v.optional(
+      v.array(
+        v.object({
+          index: v.number(),
+          title: v.string(),
+          startParagraphId: v.number(),
+        }),
+      ),
+    ),
   },
-  handler: async (ctx, { bookId, status, totalChunks }) => {
-    const update: { processingStatus: typeof status; totalChunks?: number } = {
+  handler: async (ctx, { bookId, status, totalChunks, chapters }) => {
+    const update: { processingStatus: typeof status; totalChunks?: number; chapters?: ChapterInfo[] } = {
       processingStatus: status,
     };
     if (totalChunks !== undefined) {
       update.totalChunks = totalChunks;
+    }
+    if (chapters !== undefined) {
+      update.chapters = chapters;
     }
     await ctx.db.patch(bookId, update);
   },

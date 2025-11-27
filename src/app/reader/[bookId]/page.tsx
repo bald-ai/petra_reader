@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
-import LanguageReader, { Paragraph } from "@/components/language-reader";
+import LanguageReader, { ChapterInfo, Paragraph } from "@/components/language-reader";
 import { useOnline } from "@/hooks/use-online";
 
 type ChunkRecord = {
@@ -55,6 +55,7 @@ export default function ReaderPage() {
   const saveReadingPosition = useMutation(api.books.saveReadingPosition);
   const hasTouchedRef = useRef(false);
   const previousBookIdRef = useRef<Id<"books"> | undefined>(bookId);
+  const initialScrollSetRef = useRef<Id<"books"> | null>(null);
   const savePositionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const online = useOnline();
   const pendingProgressKey = bookId ? `petra:pendingProgress:${bookId}` : null;
@@ -76,23 +77,37 @@ export default function ReaderPage() {
   const translationsWarmedUpRef = useRef(false);
   const warmupTranslateWord = useAction(api.translations.translateWord);
   const warmupLookupDefinition = useAction(api.translations.lookupWordDefinition);
+  const [scrollTargetParagraphId, setScrollTargetParagraphId] = useState<number | null>(null);
+  const [activeChapterIndex, setActiveChapterIndex] = useState(0);
 
   // Derive flattened paragraphs array from chunkMap - O(active chunks) not O(total paragraphs)
   const paragraphs = useMemo(() => {
-    if (chunkMap.size === 0 || totalChunks <= 0) return [];
+    if (totalChunks <= 0) return [];
 
     // Find the range of loaded chunks to minimize array size
-    let minChunk = Infinity;
     let maxChunk = -1;
     for (const chunkIndex of chunkMap.keys()) {
-      minChunk = Math.min(minChunk, chunkIndex);
       maxChunk = Math.max(maxChunk, chunkIndex);
     }
 
-    if (maxChunk < 0) return [];
+    const targetChunk =
+      totalChunks > 0 && scrollTargetParagraphId !== null && scrollTargetParagraphId !== undefined
+        ? Math.max(
+            0,
+            Math.min(Math.floor((scrollTargetParagraphId - 1) / CHUNK_SIZE), totalChunks - 1),
+          )
+        : -1;
 
-    // Calculate the total size needed (only up to highest loaded chunk)
-    const totalSize = Math.min((maxChunk + 1) * CHUNK_SIZE, totalChunks * CHUNK_SIZE);
+    const maxChunkIndex = Math.max(maxChunk, targetChunk);
+    if (maxChunkIndex < 0) return [];
+
+    // Calculate the total size needed (covers loaded chunks plus any pending scroll target)
+    const lastChunkLength =
+      chunkMap.get(totalChunks - 1)?.length ??
+      chunkMetadataRef.current.get(totalChunks - 1)?.length ??
+      CHUNK_SIZE;
+    const maxParagraphs = (totalChunks - 1) * CHUNK_SIZE + Math.max(lastChunkLength, 0);
+    const totalSize = Math.min((maxChunkIndex + 1) * CHUNK_SIZE, maxParagraphs);
     const result: Paragraph[] = new Array(totalSize);
 
     // Fill with placeholders
@@ -116,7 +131,7 @@ export default function ReaderPage() {
     }
 
     return result;
-  }, [chunkMap, totalChunks]);
+  }, [chunkMap, totalChunks, scrollTargetParagraphId]);
 
   const chunkRequestArgs =
     bookId && chunkRequestRange
@@ -130,6 +145,65 @@ export default function ReaderPage() {
   const chunkBatch = useQuery(api.books.getChunks, chunkRequestArgs);
 
   const isRequestingChunks = chunkRequestRange !== null;
+  const chapters: ChapterInfo[] = useMemo(() => {
+    if (book && book !== null && Array.isArray(book.chapters) && book.chapters.length > 0) {
+      const sorted = [...book.chapters].sort((a, b) => a.startParagraphId - b.startParagraphId);
+      const seenTitles = new Set<string>();
+      return sorted.filter((chapter) => {
+        const norm = chapter.title
+          .normalize("NFD")
+          .replace(/\p{Diacritic}/gu, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        if (seenTitles.has(norm)) {
+          return false;
+        }
+        seenTitles.add(norm);
+        return true;
+      });
+    }
+    if (book && book !== null) {
+      return [
+        {
+          index: 0,
+          title: book.title || "Full book",
+          startParagraphId: 1,
+        },
+      ];
+    }
+    return [];
+  }, [book]);
+
+  const paragraphsWithHeadings = useMemo(() => {
+    if (paragraphs.length === 0 || chapters.length === 0) {
+      return paragraphs;
+    }
+    const headingMap = new Map<number, ChapterInfo>();
+    for (const chapter of chapters) {
+      const insertIndex = chapter.startParagraphId - 1;
+      if (insertIndex >= 0 && insertIndex <= paragraphs.length - 1) {
+        headingMap.set(insertIndex, chapter);
+      }
+    }
+    if (headingMap.size === 0) {
+      return paragraphs;
+    }
+    const result: Paragraph[] = [];
+    for (let i = 0; i < paragraphs.length; i++) {
+      const heading = headingMap.get(i);
+      if (heading) {
+        result.push({
+          id: -100000 - heading.index,
+          spanish: heading.title,
+          english: "",
+          isHeading: true,
+        });
+      }
+      result.push(paragraphs[i]);
+    }
+    return result;
+  }, [paragraphs, chapters]);
 
   useEffect(() => {
     if (translationsWarmedUpRef.current || !online) {
@@ -324,6 +398,25 @@ export default function ReaderPage() {
     [bookId, status, scheduleChunkFetch],
   );
 
+  const findChapterIndexForParagraph = useCallback(
+    (paragraphId: number | null) => {
+      if (!paragraphId || chapters.length === 0) {
+        return 0;
+      }
+      let candidate = 0;
+      for (let i = 0; i < chapters.length; i++) {
+        const chapter = chapters[i];
+        if (paragraphId >= chapter.startParagraphId) {
+          candidate = i;
+        } else {
+          break;
+        }
+      }
+      return candidate;
+    },
+    [chapters],
+  );
+
   const handleVisibleRangeChange = useCallback(
     (range: { startIndex: number; endIndex: number }) => {
       if (!totalChunks || totalChunks <= 0) {
@@ -341,9 +434,14 @@ export default function ReaderPage() {
       ensureChunksForWindow(windowRange);
 
       // Debounced save reading position
-      if (bookId && paragraphs.length > 0 && range.startIndex >= 0) {
-        const firstVisibleParagraph = paragraphs[range.startIndex];
-        if (firstVisibleParagraph && !firstVisibleParagraph.isPlaceholder && firstVisibleParagraph.id > 0) {
+      if (bookId && paragraphsWithHeadings.length > 0 && range.startIndex >= 0) {
+        const firstVisibleParagraph = paragraphsWithHeadings[range.startIndex];
+        if (
+          firstVisibleParagraph &&
+          !firstVisibleParagraph.isPlaceholder &&
+          !firstVisibleParagraph.isHeading &&
+          firstVisibleParagraph.id > 0
+        ) {
           if (savePositionTimeoutRef.current) {
             clearTimeout(savePositionTimeoutRef.current);
           }
@@ -352,8 +450,28 @@ export default function ReaderPage() {
           }, 1000);
         }
       }
+
+      // Update active chapter indicator based on the first fully loaded visible paragraph
+      let visibleParagraphId: number | null = null;
+      for (let i = range.startIndex; i <= range.endIndex && i < paragraphsWithHeadings.length; i++) {
+        const candidate = paragraphsWithHeadings[i];
+        if (candidate && !candidate.isPlaceholder && !candidate.isHeading && candidate.id > 0) {
+          visibleParagraphId = candidate.id;
+          break;
+        }
+      }
+      const nextChapterIndex = findChapterIndexForParagraph(visibleParagraphId);
+      setActiveChapterIndex(nextChapterIndex);
     },
-    [totalChunks, pruneChunksOutsideWindow, ensureChunksForWindow, bookId, paragraphs, persistReadingPosition],
+    [
+      totalChunks,
+      pruneChunksOutsideWindow,
+      ensureChunksForWindow,
+      bookId,
+      paragraphsWithHeadings,
+      persistReadingPosition,
+      findChapterIndexForParagraph,
+    ],
   );
   const resetLoadedData = useCallback(() => {
     chunkMetadataRef.current.clear();
@@ -371,6 +489,8 @@ export default function ReaderPage() {
     }
     setChunkRequestRange((prev) => (prev === null ? prev : null));
     setChunkMap((prev) => (prev.size > 0 ? new Map() : prev));
+    setScrollTargetParagraphId((prev) => (prev !== null ? null : prev));
+    setActiveChapterIndex(0);
   }, []);
 
   useEffect(() => {
@@ -378,6 +498,7 @@ export default function ReaderPage() {
     previousBookIdRef.current = bookId;
 
     if (bookIdChanged) {
+      initialScrollSetRef.current = null;
       startTransition(() => {
         resetLoadedData();
       });
@@ -387,10 +508,19 @@ export default function ReaderPage() {
       startTransition(() => {
         // Check if there's a saved reading position
         const savedParagraphId = book?.lastReadParagraphId;
+        const initialTarget =
+          savedParagraphId && savedParagraphId > 0
+            ? savedParagraphId
+            : chapters[0]?.startParagraphId ?? null;
+
+        if (bookId && initialScrollSetRef.current !== bookId) {
+          setScrollTargetParagraphId(initialTarget);
+          initialScrollSetRef.current = bookId;
+        }
         if (savedParagraphId && savedParagraphId > 0) {
           // Calculate which chunk contains the saved paragraph
           // Paragraph IDs are sequential, so we can estimate the chunk
-          const estimatedChunkIndex = Math.floor(savedParagraphId / CHUNK_SIZE);
+          const estimatedChunkIndex = Math.floor((savedParagraphId - 1) / CHUNK_SIZE);
           const targetChunk = Math.max(0, Math.min(estimatedChunkIndex, totalChunks - 1));
           // Load the target chunk and surrounding chunks
           const startChunk = Math.max(0, targetChunk - CHUNK_WINDOW_PADDING);
@@ -405,9 +535,10 @@ export default function ReaderPage() {
       startTransition(() => {
         setChunkRequestRange((prev) => (prev === null ? prev : null));
         resetLoadedData();
+        setScrollTargetParagraphId(null);
       });
     }
-  }, [bookId, resetLoadedData, scheduleChunkFetch, status, totalChunks, book]);
+  }, [bookId, resetLoadedData, scheduleChunkFetch, status, totalChunks, book, chapters]);
 
   useEffect(() => {
     if (!chunkRequestRange) {
@@ -521,6 +652,26 @@ export default function ReaderPage() {
     const nextTo = Math.min(totalChunks - 1, nextFrom + CHUNK_BATCH_SIZE - 1);
     scheduleChunkFetch(nextFrom, nextTo);
   }, [bookId, status, totalChunks, scheduleChunkFetch, highestLoadedChunkIndex]);
+
+  const handleChapterSelect = useCallback(
+    (chapter: ChapterInfo) => {
+      if (!chapter || !bookId || status !== "completed" || !totalChunks || totalChunks <= 0) {
+        return;
+      }
+      const paragraphId = Math.max(1, chapter.startParagraphId);
+      setScrollTargetParagraphId(paragraphId);
+      const targetChunk = Math.max(0, Math.floor((paragraphId - 1) / CHUNK_SIZE));
+      const startChunk = Math.max(0, targetChunk - CHUNK_WINDOW_PADDING);
+      const endChunk = Math.min(totalChunks - 1, targetChunk + CHUNK_WINDOW_PADDING);
+      desiredChunkWindowRef.current = { startChunk, endChunk };
+      ensureChunksForWindow({ startChunk, endChunk });
+      const chapterArrayIndex = chapters.findIndex((c) => c.index === chapter.index);
+      if (chapterArrayIndex >= 0) {
+        setActiveChapterIndex(chapterArrayIndex);
+      }
+    },
+    [bookId, status, totalChunks, ensureChunksForWindow, chapters],
+  );
 
   const hasMoreChunks =
     status === "completed" &&
@@ -648,14 +799,17 @@ export default function ReaderPage() {
       <LanguageReader
         title={book.title}
         subtitle={book.author?.trim() ?? null}
-        paragraphs={paragraphs}
+        paragraphs={paragraphsWithHeadings}
         hasMore={hasMoreChunks}
         isInitialLoading={paragraphs.length === 0 && isRequestingChunks}
         isLoadingMore={isRequestingChunks && paragraphs.length > 0}
         onLoadMore={hasMoreChunks ? requestMoreChunks : undefined}
         onVisibleRangeChange={handleVisibleRangeChange}
         onBack={() => router.push("/")}
-        initialScrollToParagraphId={book.lastReadParagraphId ?? null}
+        scrollToParagraphId={scrollTargetParagraphId}
+        chapters={chapters}
+        activeChapterIndex={activeChapterIndex}
+        onSelectChapter={handleChapterSelect}
       />
     </>
   );

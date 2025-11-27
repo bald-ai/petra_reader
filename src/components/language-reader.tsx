@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useAction } from "convex/react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronLeft, Link2, Loader2, MoreVertical, X } from "lucide-react"
+import { ChevronDown, ChevronLeft, Link2, Loader2, MoreVertical, X } from "lucide-react"
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -14,6 +14,13 @@ export interface Paragraph {
   spanish: string
   english: string
   isPlaceholder?: boolean
+  isHeading?: boolean
+}
+
+export type ChapterInfo = {
+  index: number
+  title: string
+  startParagraphId: number
 }
 
 type ConjugationTense = "present" | "preterite" | "imperfect" | "conditional" | "future"
@@ -68,7 +75,10 @@ type LanguageReaderProps = {
   onLoadMore?: () => void
   onBack?: () => void
   onVisibleRangeChange?: (range: { startIndex: number; endIndex: number }) => void
-  initialScrollToParagraphId?: number | null
+  scrollToParagraphId?: number | null
+  chapters?: ChapterInfo[]
+  activeChapterIndex?: number
+  onSelectChapter?: (chapter: ChapterInfo) => void
 }
 
 export default function LanguageReader({
@@ -81,7 +91,10 @@ export default function LanguageReader({
   onLoadMore,
   onBack,
   onVisibleRangeChange,
-  initialScrollToParagraphId,
+  scrollToParagraphId,
+  chapters = [],
+  activeChapterIndex = 0,
+  onSelectChapter,
 }: LanguageReaderProps) {
   const [visibleTranslations, setVisibleTranslations] = useState<Set<number>>(new Set())
   const [translations, setTranslations] = useState<Record<number, string>>({})
@@ -99,6 +112,7 @@ export default function LanguageReader({
   const [wordDefinitionError, setWordDefinitionError] = useState<string | null>(null)
   const [readerFontSize, setReaderFontSize] = useState(DEFAULT_FONT_SIZE)
   const [isFontMenuOpen, setIsFontMenuOpen] = useState(false)
+  const [isChapterMenuOpen, setIsChapterMenuOpen] = useState(false)
   const [isHeaderHidden, setIsHeaderHidden] = useState(false)
   const [headerHeight, setHeaderHeight] = useState(56)
   const [activeTab, setActiveTab] = useState("translation")
@@ -121,6 +135,7 @@ export default function LanguageReader({
   const lookupWordDefinitionAction = useAction(api.translations.lookupWordDefinition)
   const lookupVerbConjugationsAction = useAction(api.translations.lookupVerbConjugations)
   const headerRef = useRef<HTMLElement | null>(null)
+  const chapterMenuRef = useRef<HTMLDivElement | null>(null)
   const fontMenuRef = useRef<HTMLDivElement | null>(null)
   const scrollParentRef = useRef<HTMLDivElement | null>(null)
   const lastScrollTopRef = useRef(0)
@@ -219,8 +234,34 @@ export default function LanguageReader({
   }, [isFontMenuOpen])
 
   useEffect(() => {
+    if (!isChapterMenuOpen) {
+      return
+    }
+    const handleClick = (event: MouseEvent) => {
+      if (!chapterMenuRef.current) {
+        return
+      }
+      if (!chapterMenuRef.current.contains(event.target as Node)) {
+        setIsChapterMenuOpen(false)
+      }
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsChapterMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClick)
+    document.addEventListener("keydown", handleKeyDown)
+    return () => {
+      document.removeEventListener("mousedown", handleClick)
+      document.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [isChapterMenuOpen])
+
+  useEffect(() => {
     if (isHeaderHidden) {
       setIsFontMenuOpen(false)
+      setIsChapterMenuOpen(false)
     }
   }, [isHeaderHidden])
 
@@ -265,27 +306,25 @@ export default function LanguageReader({
     }
   }, [virtualItems, onVisibleRangeChange])
 
-  const hasScrolledToInitialRef = useRef(false)
-  const initialScrollToParagraphIdRef = useRef<number | null>(null)
-  
-  // Track the initial scroll target - only set once when prop first becomes available
+  const pendingScrollParagraphIdRef = useRef<number | null>(scrollToParagraphId ?? null)
+
   useEffect(() => {
-    if (initialScrollToParagraphId && !initialScrollToParagraphIdRef.current) {
-      initialScrollToParagraphIdRef.current = initialScrollToParagraphId
+    if (typeof scrollToParagraphId === "number") {
+      pendingScrollParagraphIdRef.current = scrollToParagraphId
+    } else {
+      pendingScrollParagraphIdRef.current = null
     }
-  }, [initialScrollToParagraphId])
-  
+  }, [scrollToParagraphId])
+
   useEffect(() => {
-    const targetParagraphId = initialScrollToParagraphIdRef.current
-    if (!targetParagraphId || hasScrolledToInitialRef.current || paragraphs.length === 0 || isInitialLoading) {
+    const targetParagraphId = pendingScrollParagraphIdRef.current
+    if (!targetParagraphId || paragraphs.length === 0 || isInitialLoading) {
       return
     }
-    
-    // Find the index of the paragraph with the matching ID
+
     const targetIndex = paragraphs.findIndex((p) => p.id === targetParagraphId && !p.isPlaceholder)
     if (targetIndex >= 0) {
-      hasScrolledToInitialRef.current = true
-      // Use multiple requestAnimationFrame calls to ensure the virtualizer has fully rendered and measured
+      pendingScrollParagraphIdRef.current = null
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setTimeout(() => {
@@ -295,14 +334,12 @@ export default function LanguageReader({
                 behavior: "auto",
               })
             } catch (error) {
-              console.warn("Failed to scroll to initial position:", error)
+              console.warn("Failed to scroll to target paragraph:", error)
             }
           }, 100)
         })
       })
     }
-    // Don't mark as attempted if paragraph not found yet - it might still be loading
-    // Only mark as attempted if we've waited a reasonable amount and still can't find it
   }, [paragraphs, isInitialLoading, rowVirtualizer])
 
   const fetchWordConjugations = useCallback(
@@ -1010,15 +1047,66 @@ export default function LanguageReader({
           isHeaderHidden ? "-translate-y-full" : "translate-y-0",
         )}
       >
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="hover:bg-accent"
-          onClick={() => onBack?.()}
-          aria-label="Go back"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hover:bg-accent"
+            onClick={() => onBack?.()}
+            aria-label="Go back"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </Button>
+          {chapters.length > 0 && (
+            <div ref={chapterMenuRef} className="relative">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 truncate max-w-[220px] border-border/60 bg-background/70 text-left hover:bg-accent"
+                aria-haspopup="menu"
+                aria-expanded={isChapterMenuOpen}
+                onClick={() => setIsChapterMenuOpen((prev) => !prev)}
+              >
+                <span className="hidden sm:inline truncate">
+                  {chapters[activeChapterIndex]?.title ?? "Chapters"}
+                </span>
+                <span className="sm:hidden">Chapters</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </Button>
+              {isChapterMenuOpen && (
+                <div className="absolute left-0 top-full z-30 mt-2 w-64 max-w-sm rounded-lg border border-border/60 bg-card/95 p-2 shadow-xl backdrop-blur">
+                  <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Chapters
+                  </p>
+                  <div className="max-h-72 overflow-auto">
+                    {chapters.map((chapter) => {
+                      const isActive = chapter.index === (chapters[activeChapterIndex]?.index ?? 0)
+                      return (
+                        <button
+                          key={chapter.index}
+                          type="button"
+                          className={cn(
+                            "flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm transition-colors",
+                            isActive
+                              ? "bg-accent text-accent-foreground"
+                              : "hover:bg-muted/60 text-foreground"
+                          )}
+                          onClick={() => {
+                            setIsChapterMenuOpen(false)
+                            onSelectChapter?.(chapter)
+                          }}
+                        >
+                          <span className="truncate">{chapter.title}</span>
+                          {isActive && <span className="text-[10px] font-semibold uppercase text-muted-foreground">Now</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <div className="flex-1 px-2 text-center">
           <h1 className="text-lg font-semibold leading-tight tracking-tight">{title ?? "Capítulo Seis"}</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">{subtitle ?? "1 Devorador de Almas"}</p>
@@ -1086,6 +1174,7 @@ export default function LanguageReader({
               if (!paragraph) {
                 return null
               }
+              const isHeading = paragraph.isHeading === true
               const isPlaceholder = paragraph.isPlaceholder === true
               const hasTranslation = !isPlaceholder && paragraph.spanish.trim().length > 0
               const isTranslationVisible = visibleTranslations.has(paragraph.id)
@@ -1111,57 +1200,20 @@ export default function LanguageReader({
                   className="pb-6"
                 >
                   <div className="flex flex-col">
-                    <div
-                      className={cn(
-                        "group relative flex items-baseline gap-1 px-1 sm:px-0",
-                        hasTranslation && "sm:items-start sm:gap-0",
-                      )}
-                    >
-                      {hasTranslation && (
-                        <div
-                          className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
-                          aria-hidden="true"
-                        />
-                      )}
-                      <p
-                        className="flex-1 font-serif leading-relaxed text-foreground/80 text-left tracking-[0.01em] [text-wrap:pretty]"
-                        style={{ fontSize: `${readerFontSize}px` }}
-                      >
-                        {renderClickableText(paragraph)}
-                      </p>
-                      {hasTranslation && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={cn(
-                            "h-8 w-8 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
-                            "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
-                          )}
-                          onClick={() => handleParagraphClick(paragraph)}
-                          aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
-                          title={translationButtonTitle}
-                          disabled={disableTranslationToggle}
+                    {isHeading ? (
+                      <div className="px-1 sm:px-0 py-4">
+                        <p
+                          className="text-center font-serif text-xl font-semibold text-foreground/90 tracking-tight"
+                          style={{ fontSize: `${Math.min(readerFontSize + 4, 28)}px` }}
                         >
-                          {isTranslationVisible ? (
-                            <X className="h-4 w-4" />
-                          ) : (
-                            <Link2 className="h-4 w-4" />
-                          )}
-                        </Button>
-                      )}
-                    </div>
-                    <div
-                      className={cn(
-                        "overflow-hidden transition-all duration-300 ease-out",
-                        isTranslationVisible && hasTranslation
-                          ? "max-h-[1000px] opacity-100"
-                          : "max-h-0 opacity-0"
-                      )}
-                    >
+                          {paragraph.spanish}
+                        </p>
+                      </div>
+                    ) : (
                       <div
                         className={cn(
-                          "pt-3",
-                          hasTranslation && "flex items-baseline gap-1 px-1 sm:px-0 sm:items-start sm:gap-0",
+                          "group relative flex items-baseline gap-1 px-1 sm:px-0",
+                          hasTranslation && "sm:items-start sm:gap-0",
                         )}
                       >
                         {hasTranslation && (
@@ -1170,52 +1222,102 @@ export default function LanguageReader({
                             aria-hidden="true"
                           />
                         )}
-                        {(() => {
-                          if (!isTranslationVisible || !hasTranslation) {
-                            return null
-                          }
-                          const translatedText = translations[paragraph.id]
-                          const translationError = translationErrors[paragraph.id]
-                          const isLoading = loadingTranslations.has(paragraph.id)
-                          
-                          if (isLoading) {
-                            return (
-                              <span className="inline-flex items-center gap-2 text-muted-foreground">
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                                Translating…
-                              </span>
-                            )
-                          }
-                          if (translationError) {
-                            return <span className="text-sm font-medium text-destructive">{translationError}</span>
-                          }
-                          if (translatedText) {
-                            return (
-                              <p
-                                className="flex-1 font-serif leading-relaxed text-muted-foreground/70 text-left tracking-[0.01em] [text-wrap:pretty]"
-                                style={{ fontSize: `${readerFontSize}px` }}
-                              >
-                                {translatedText}
-                              </p>
-                            )
-                          }
-                          return (
-                            <p
-                              className="flex-1 font-serif leading-relaxed text-muted-foreground/90 text-left tracking-[0.01em] [text-wrap:pretty]"
-                              style={{ fontSize: `${readerFontSize}px` }}
-                            >
-                              {paragraph.english}
-                            </p>
-                          )
-                        })()}
+                        <p
+                          className="flex-1 font-serif leading-relaxed text-foreground/80 text-left tracking-[0.01em] [text-wrap:pretty]"
+                          style={{ fontSize: `${readerFontSize}px` }}
+                        >
+                          {renderClickableText(paragraph)}
+                        </p>
                         {hasTranslation && (
-                          <div
-                            className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
-                            aria-hidden="true"
-                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className={cn(
+                              "h-8 w-8 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
+                              "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
+                            )}
+                            onClick={() => handleParagraphClick(paragraph)}
+                            aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
+                            title={translationButtonTitle}
+                            disabled={disableTranslationToggle}
+                          >
+                            {isTranslationVisible ? (
+                              <X className="h-4 w-4" />
+                            ) : (
+                              <Link2 className="h-4 w-4" />
+                            )}
+                          </Button>
                         )}
                       </div>
-                    </div>
+                    )}
+                    {!isHeading && (
+                      <div
+                        className={cn(
+                          "overflow-hidden transition-all duration-300 ease-out",
+                          isTranslationVisible && hasTranslation
+                            ? "max-h-[1000px] opacity-100"
+                            : "max-h-0 opacity-0"
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "pt-3",
+                            hasTranslation && "flex items-baseline gap-1 px-1 sm:px-0 sm:items-start sm:gap-0",
+                          )}
+                        >
+                          {hasTranslation && (
+                            <div
+                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
+                              aria-hidden="true"
+                            />
+                          )}
+                          {(() => {
+                            if (!isTranslationVisible || !hasTranslation) {
+                              return null
+                            }
+                            const translatedText = translations[paragraph.id]
+                            const translationError = translationErrors[paragraph.id]
+                            const isLoading = loadingTranslations.has(paragraph.id)
+                            
+                            if (isLoading) {
+                              return (
+                                <span className="inline-flex items-center gap-2 text-muted-foreground">
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  Translating…
+                                </span>
+                              )
+                            }
+                            if (translationError) {
+                              return <span className="text-sm font-medium text-destructive">{translationError}</span>
+                            }
+                            if (translatedText) {
+                              return (
+                                <p
+                                  className="flex-1 font-serif leading-relaxed text-muted-foreground/70 text-left tracking-[0.01em] [text-wrap:pretty]"
+                                  style={{ fontSize: `${readerFontSize}px` }}
+                                >
+                                  {translatedText}
+                                </p>
+                              )
+                            }
+                            return (
+                              <p
+                                className="flex-1 font-serif leading-relaxed text-muted-foreground/90 text-left tracking-[0.01em] [text-wrap:pretty]"
+                                style={{ fontSize: `${readerFontSize}px` }}
+                              >
+                                {paragraph.english}
+                              </p>
+                            )
+                          })()}
+                          {hasTranslation && (
+                            <div
+                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )

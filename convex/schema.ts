@@ -18,6 +18,15 @@ export default defineSchema({
     createdAt: v.number(),
     lastOpenedAt: v.optional(v.union(v.number(), v.null())),
     lastReadParagraphId: v.optional(v.union(v.number(), v.null())),
+    chapters: v.optional(
+      v.array(
+        v.object({
+          index: v.number(),
+          title: v.string(),
+          startParagraphId: v.number(),
+        }),
+      ),
+    ),
     userId: v.id("users"),
     processingStatus: v.optional(v.union(v.literal("pending"), v.literal("processing"), v.literal("completed"), v.literal("failed"))),
     totalChunks: v.optional(v.number()),
