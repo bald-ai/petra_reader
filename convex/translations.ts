@@ -377,7 +377,7 @@ export const lookupVerbConjugations = action({
   }
 
   const conjugationInstruction =
-    "Return Spanish conjugations for the requested verb. If the word is not a verb or cannot be conjugated, return an error message instead of conjugations.";
+    "Return Spanish conjugations for the requested verb. If the supplied token is a Spanish conjugated or derived form (gerund, participle, imperative, etc.) that can be mapped to an infinitive, normalize it to that verb and return conjugations instead of an error. Only return an error message when the word truly cannot be treated as a Spanish verb, and never attempt to convert English verbs.";
   const conjugationUserPrompt = JSON.stringify(
     {
       instruction: conjugationInstruction,
@@ -419,7 +419,7 @@ export const lookupVerbConjugations = action({
           {
             role: "system",
             content:
-              "You are a Spanish verb conjugation API. Respond only with valid JSON that matches the requested shape.",
+              "You are a Spanish verb conjugation API. If the input word is a Spanish conjugated form, infer its infinitive and conjugate it instead of returning errors. Respond only with valid JSON that matches the requested shape.",
           },
           {
             role: "user",
