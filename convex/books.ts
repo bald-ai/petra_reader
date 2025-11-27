@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalMutation } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -366,7 +366,7 @@ export const getProcessingStatus = query({
   },
 });
 
-export const updateProcessingStatus = mutation({
+export const updateProcessingStatus = internalMutation({
   args: {
     bookId: v.id("books"),
     status: v.union(v.literal("pending"), v.literal("processing"), v.literal("completed"), v.literal("failed")),
@@ -383,7 +383,7 @@ export const updateProcessingStatus = mutation({
   },
 });
 
-export const insertChunks = mutation({
+export const insertChunks = internalMutation({
   args: {
     bookId: v.id("books"),
     chunks: v.array(

@@ -16,25 +16,6 @@ export interface Paragraph {
   isPlaceholder?: boolean
 }
 
-type WordDefinition = {
-  word: string
-  type: string
-  translation: string
-  definitions: {
-    spanish: string
-    related: string[]
-    examples: string[]
-  }
-  translations: {
-    main: string
-    alternatives: Array<{
-      word: string
-      type: string
-      meanings: string[]
-    }>
-  }
-}
-
 type ConjugationTense = "present" | "preterite" | "imperfect" | "conditional" | "future"
 type ConjugationsByTense = Record<
   ConjugationTense,
@@ -67,208 +48,6 @@ const buildEmptyConjugations = (): ConjugationsByTense =>
     return acc
   }, {} as ConjugationsByTense)
 
-export const defaultParagraphs: Paragraph[] = [
-  {
-    id: 1,
-    spanish:
-      "También estaba solo. Tragué, con un chasquido en la garganta, y traté de mantener la calma mientras repasaba los hechos. Uno: había habido un incidente en la base. Dos: la última vez que estuve consciente, estaba atrapado en una celda con Wyn el Soul Eater, sin poder salir.",
-    english:
-      "I was also alone. I swallowed, with a click in my throat, and tried to stay calm while going over the facts. One: there had been an incident at the base. Two: the last time I was aware, I was trapped in a cell with Wyn the Soul Eater, unable to escape.",
-  },
-  {
-    id: 2,
-    spanish:
-      "Tres: ahora estaba en una habitación de motel, así que definitivamente estaba fuera de la base. Cuatro: estaba vivo, así que Wyn no me había matado. Otra vez.",
-    english:
-      "Three: I was now in a motel room, so I was definitely out of the base. Four: I was alive, so Wyn hadn't killed me. Again.",
-  },
-  {
-    id: 3,
-    spanish:
-      "Eso significaba que alguien debía haberme sacado de la celda de Wyn después de resolver el incidente. Tal vez la base había sido comprometida y todos habíamos sido trasladados mientras se resolvía. Ese parecía el escenario más probable.",
-    english:
-      "That meant someone must have gotten me out of Wyn's cell after resolving the incident. Maybe the base had been compromised and we had all been relocated while it was being resolved. That seemed like the most likely scenario.",
-  },
-  {
-    id: 4,
-    spanish:
-      "La habitación olía a detergente barato y a metal oxidado. Las cortinas estaban descosidas y el aire acondicionado lanzaba suspiros irregulares, como si también estuviera atrapado conmigo.",
-    english:
-      "The room smelled of cheap detergent and rusted metal. The curtains were frayed and the air conditioner let out irregular sighs, as if it were trapped with me.",
-  },
-  {
-    id: 5,
-    spanish:
-      "Había una nota arrugada en la mesita de noche, escrita con una tinta azul que se corría. Decía: \"Quédate quieto hasta que anochezca. No confíes en nadie con ojos grises.\"",
-    english:
-      "There was a crumpled note on the nightstand, written in smeared blue ink. It read, \"Stay still until nightfall. Trust no one with gray eyes.\"",
-  },
-  {
-    id: 6,
-    spanish:
-      "Cuando abrí la puerta, la noche todavía no había llegado, pero el sol estaba por rendirse. El estacionamiento vacío reflejaba el cielo púrpura y no había señales de vehículos oficiales.",
-    english:
-      "When I opened the door, night had not yet arrived, but the sun was about to give up. The empty parking lot reflected the purple sky and there were no signs of official vehicles.",
-  },
-  {
-    id: 7,
-    spanish:
-      "El pasillo se extendía con alfombra húmeda, y cada puerta estaba cerrada con doble seguro. Imaginé a otros huéspedes conteniendo la respiración, esperando su propio rescate.",
-    english:
-      "The hallway stretched out with damp carpet, and every door was locked twice. I imagined other guests holding their breath, waiting for their own rescue.",
-  },
-  {
-    id: 8,
-    spanish:
-      "En la recepción encontré a un adolescente que veía videos en su teléfono. No levantó la vista hasta que toqué la campana oxidada, y aun así tardó en reconocer mi existencia.",
-    english:
-      "At the front desk I found a teenager watching videos on his phone. He did not look up until I tapped the rusty bell, and even then he took his time acknowledging my existence.",
-  },
-  {
-    id: 9,
-    spanish:
-      "La autopista seguía detrás del motel como un río negro. Decidí caminar hasta la gasolinera más cercana buscando cobertura, pero la señal estaba muerta.",
-    english:
-      "The highway ran behind the motel like a black river. I decided to walk to the nearest gas station in search of coverage, but the signal was dead.",
-  },
-  {
-    id: 10,
-    spanish:
-      "Avancé sin un plan, sintiendo que cada paso me alejaba de Wyn pero también de cualquier ayuda. Nadie sabía dónde estaba, y si lo sabían, no habían dejado pistas claras.",
-    english:
-      "I moved forward without a plan, feeling that each step took me farther from Wyn but also from any help. No one knew where I was, and if they did, they had not left any clear clues.",
-  },
-  {
-    id: 11,
-    spanish:
-      "Wyn podía aparecer en cualquier sombra prolongada; lo había visto hacerlo antes. La idea de que pudiera haberme dejado ir por pura diversión me helaba la sangre.",
-    english:
-      "Wyn could appear in any stretched shadow; I had seen him do it before. The thought that he might have let me go purely for fun froze my blood.",
-  },
-  {
-    id: 12,
-    spanish:
-      "La base debía de estar en cuarentena. Si intentaba volver sin autorización, las defensas automáticas me derribarían antes de cruzar el perímetro.",
-    english:
-      "The base had to be under quarantine. If I tried to return without authorization, the automated defenses would take me down before I crossed the perimeter.",
-  },
-  {
-    id: 13,
-    spanish:
-      "Seguí el sonido distante de una radio hasta encontrar un taller abandonado. Dentro había restos de comidas recientes, lo que significaba que alguien más usaba ese lugar.",
-    english:
-      "I followed the distant sound of a radio until I found an abandoned workshop. Inside there were remnants of recent meals, which meant someone else was using the place.",
-  },
-  {
-    id: 14,
-    spanish:
-      "En una mesa de trabajo vi un mapa marcado con círculos rojos alrededor de la ciudad. Uno de ellos coincidía con la ubicación del motel; otro señalaba la presa al norte.",
-    english:
-      "On a workbench I saw a map marked with red circles around the city. One of them matched the motel's location; another pointed to the dam to the north.",
-  },
-  {
-    id: 15,
-    spanish:
-      "Las coordenadas apuntaban a una cavidad bajo la presa, un viejo refugio que usábamos en misiones clandestinas. Si alguien de la base me había sacado, tal vez me esperaba allí.",
-    english:
-      "The coordinates pointed to a cavity beneath the dam, an old shelter we used during covert missions. If someone from the base had taken me out, maybe they were waiting for me there.",
-  },
-  {
-    id: 16,
-    spanish:
-      "El viaje en autobús hasta la presa tomó dos horas, más que suficientes para repasar cada decisión que me había traído aquí. No llevaba armas, ni credenciales, solo mi memoria fallida.",
-    english:
-      "The bus ride to the dam took two hours, more than enough time to go over every decision that had brought me here. I carried no weapons, no credentials, only my faulty memory.",
-  },
-  {
-    id: 17,
-    spanish:
-      "A medianoche el conductor apagó las luces interiores y el paisaje se volvió una sucesión de siluetas dentadas. Conté los postes de luz para saber dónde bajar sin llamar la atención.",
-    english:
-      "At midnight the driver turned off the interior lights and the landscape became a succession of jagged silhouettes. I counted the lamp posts to know where to get off without drawing attention.",
-  },
-  {
-    id: 18,
-    spanish:
-      "La estación estaba desierta, salvo por un perro que cuidaba el silencio. Cuando el autobús se alejó, el animal me siguió como si supiera mi destino.",
-    english:
-      "The station was deserted, except for a dog guarding the silence. When the bus pulled away, the animal followed me as if it knew my destination.",
-  },
-  {
-    id: 19,
-    spanish:
-      "Me escondí tras los pilares de hormigón y bajé por una escalera de mantenimiento que apenas recordaba. El aire era húmedo, cargado con el zumbido de generadores ocultos.",
-    english:
-      "I hid behind the concrete pillars and went down a maintenance staircase I barely remembered. The air was humid, charged with the hum of hidden generators.",
-  },
-  {
-    id: 20,
-    spanish:
-      "Cuando el amanecer tiñó de naranja la presa, vi una silueta esperándome al final del túnel. No era Wyn, pero llevaba su insignia: una máscara grabada con runas que brillaban débilmente.",
-    english:
-      "When dawn stained the dam orange, I saw a silhouette waiting for me at the end of the tunnel. It was not Wyn, but it wore his insignia: a mask etched with runes that glowed faintly.",
-  },
-]
-
-const sampleDefinitions: Record<string, WordDefinition> = {
-  También: {
-    word: "También",
-    type: "adverb",
-    translation: "Also",
-    definitions: {
-      spanish:
-        "Usado para indicar la igualdad, semejanza, conformidad o relación de una cosa con otra ya nombrada.",
-      related: ["asimismo", "igualmente"],
-      examples: ["Tanto o así."],
-    },
-    translations: {
-      main: "Also",
-      alternatives: [
-        {
-          word: "también",
-          type: "adverb",
-          meanings: ["also", "también, además, ítem"],
-        },
-        {
-          word: "too",
-          type: "adverb",
-          meanings: ["también, demasiado, muy, además, por otra parte"],
-        },
-        {
-          word: "as well",
-          type: "adverb",
-          meanings: ["también"],
-        },
-      ],
-    },
-  },
-  sacado: {
-    word: "sacado",
-    type: "verb",
-    translation: "Taken",
-    definitions: {
-      spanish: "Participio pasado del verbo sacar. Extraer o hacer salir algo de donde está.",
-      related: ["extraído", "retirado"],
-      examples: ["He sacado el libro de la biblioteca."],
-    },
-    translations: {
-      main: "Taken",
-      alternatives: [
-        {
-          word: "sacado",
-          type: "verb (past participle)",
-          meanings: ["taken out", "extracted", "removed"],
-        },
-        {
-          word: "sacar",
-          type: "verb (infinitive)",
-          meanings: ["to take out", "to extract", "to remove"],
-        },
-      ],
-    },
-  },
-}
-
 type WordTranslationResult = {
   word: string
   translation: string
@@ -295,7 +74,7 @@ type LanguageReaderProps = {
 export default function LanguageReader({
   title,
   subtitle,
-  paragraphs = defaultParagraphs,
+  paragraphs = [],
   hasMore = false,
   isInitialLoading = false,
   isLoadingMore = false,
@@ -326,7 +105,6 @@ export default function LanguageReader({
   const [activeConjugationTense, setActiveConjugationTense] =
     useState<ConjugationTense>("present")
   const [conjugations, setConjugations] = useState<ConjugationsByTense | null>(null)
-  const [lastConjugatedWord, setLastConjugatedWord] = useState<string | null>(null)
   const [nonConjugatableWords, setNonConjugatableWords] = useState<Set<string>>(new Set())
   const [isConjugationLoading, setIsConjugationLoading] = useState(false)
   const [conjugationError, setConjugationError] = useState<string | null>(null)
@@ -538,7 +316,6 @@ export default function LanguageReader({
         setIsConjugationLoading(false)
         setConjugations(null)
         setConjugationError("This word is not a verb, so conjugations are unavailable.")
-        setLastConjugatedWord(word)
         return
       }
 
@@ -555,7 +332,6 @@ export default function LanguageReader({
         if (isMountedRef.current && conjugationRequestIdRef.current === requestId) {
           setIsConjugationLoading(false)
           setConjugations(cached)
-          setLastConjugatedWord(word)
         }
         return
       }
@@ -590,7 +366,6 @@ export default function LanguageReader({
               : "Conjugations are unavailable for this word.",
           )
           setConjugations(null)
-          setLastConjugatedWord(word)
           return
         }
 
@@ -601,9 +376,8 @@ export default function LanguageReader({
           if (Array.isArray(entries)) {
             normalized[tense] = entries
               .map((entry) => ({
-                pronoun:
-                  typeof entry?.pronoun === "string" ? entry.pronoun : (entry as any)?.[0],
-                form: typeof entry?.form === "string" ? entry.form : (entry as any)?.[1],
+                pronoun: typeof entry?.pronoun === "string" ? entry.pronoun : "",
+                form: typeof entry?.form === "string" ? entry.form : "",
               }))
               .filter(
                 (entry) =>
@@ -627,7 +401,6 @@ export default function LanguageReader({
           }
         }
         setConjugations(normalized)
-        setLastConjugatedWord(word)
       } catch (error) {
         if (!isMountedRef.current || conjugationRequestIdRef.current !== requestId) {
           return
@@ -968,13 +741,6 @@ export default function LanguageReader({
     [],
   )
 
-  const handleBarExpand = () => {
-    setIsWordBarExpanded(true)
-  }
-
-  // Removed drag handlers
-
-
   const closeWordBar = () => {
     setIsWordBarVisible(false)
     setIsWordBarExpanded(false)
@@ -988,7 +754,6 @@ export default function LanguageReader({
     setConjugationError(null)
     setIsConjugationLoading(false)
     setActiveConjugationTense("present")
-    setLastConjugatedWord(null)
     wordTranslationRequestIdRef.current += 1
     wordDefinitionRequestIdRef.current += 1
     conjugationRequestIdRef.current += 1

@@ -2,7 +2,7 @@
 
 import { action } from "./_generated/server";
 import { v } from "convex/values";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { extractParagraphsFromEpub, streamParagraphsFromEpub } from "./utils/epub";
 
 const CHUNK_SIZE = 50;
@@ -18,7 +18,7 @@ export const processBook = action({
       throw new Error("Book not found.");
     }
     if (!book.storageId) {
-      await ctx.runMutation(api.books.updateProcessingStatus, {
+      await ctx.runMutation(internal.books.updateProcessingStatus, {
         bookId,
         status: "failed",
       });
@@ -26,14 +26,14 @@ export const processBook = action({
     }
 
     try {
-      await ctx.runMutation(api.books.updateProcessingStatus, {
+      await ctx.runMutation(internal.books.updateProcessingStatus, {
         bookId,
         status: "processing",
       });
 
       const fileBlob = await ctx.storage.get(book.storageId);
       if (!fileBlob) {
-        await ctx.runMutation(api.books.updateProcessingStatus, {
+        await ctx.runMutation(internal.books.updateProcessingStatus, {
           bookId,
           status: "failed",
         });
@@ -50,7 +50,7 @@ export const processBook = action({
         if (chunkBuffer.length === 0) {
           return;
         }
-        await ctx.runMutation(api.books.insertChunks, {
+        await ctx.runMutation(internal.books.insertChunks, {
           bookId,
           chunks: [...chunkBuffer],
         });
@@ -88,13 +88,13 @@ export const processBook = action({
 
       await flushChunks();
 
-      await ctx.runMutation(api.books.updateProcessingStatus, {
+      await ctx.runMutation(internal.books.updateProcessingStatus, {
         bookId,
         status: "completed",
         totalChunks,
       });
     } catch (error) {
-      await ctx.runMutation(api.books.updateProcessingStatus, {
+      await ctx.runMutation(internal.books.updateProcessingStatus, {
         bookId,
         status: "failed",
       });

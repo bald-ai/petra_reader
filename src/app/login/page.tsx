@@ -6,8 +6,6 @@ import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
 export default function LoginPage() {
-  const router = useRouter();
-
   return (
     <main className="flex min-h-screen items-center justify-center bg-background px-6">
       <div className="w-full max-w-md space-y-8 rounded-xl border border-border bg-card p-8 shadow-lg">

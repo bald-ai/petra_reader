@@ -6,7 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@convex/_generated/api";
 import { Id } from "@convex/_generated/dataModel";
-import LanguageReader, { Paragraph, defaultParagraphs } from "@/components/language-reader";
+import LanguageReader, { Paragraph } from "@/components/language-reader";
 import { useOnline } from "@/hooks/use-online";
 
 type ChunkRecord = {
@@ -31,20 +31,16 @@ function buildParagraphsFromChunks(chunks: ChunkRecord[]): Paragraph[] {
 
   for (const chunk of ordered) {
     for (const paragraph of chunk.paragraphs) {
-      const fallback = DEFAULT_PARAGRAPH_LOOKUP.get(paragraph.id);
       collected.push({
         id: paragraph.id,
-        spanish: paragraph.text ?? fallback?.spanish ?? "",
-        english: fallback?.english ?? "",
+        spanish: paragraph.text ?? "",
+        english: "",
       });
     }
   }
 
   return collected;
 }
-const DEFAULT_PARAGRAPH_LOOKUP = new Map(
-  defaultParagraphs.map((paragraph) => [paragraph.id, paragraph] as const),
-);
 
 function createPlaceholderParagraph(index: number, existing?: Paragraph): Paragraph {
   return {
@@ -485,12 +481,14 @@ export default function ReaderPage() {
 
     // Defer window management to avoid infinite loop - these will trigger new chunk requests
     // which would cause this effect to run again immediately
-    setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       if (desiredChunkWindowRef.current) {
         pruneChunksOutsideWindow(desiredChunkWindowRef.current);
         ensureChunksForWindow(desiredChunkWindowRef.current);
       }
     }, 0);
+
+    return () => clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chunkBatch, chunkRequestRange]);
 
@@ -525,8 +523,10 @@ export default function ReaderPage() {
   }, [bookId]);
 
   useEffect(() => {
+    if (!bookId || !online) return;
     void flushQueuedProgress();
-  }, [flushQueuedProgress]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, online]);
 
 
   useEffect(() => {
@@ -574,7 +574,7 @@ export default function ReaderPage() {
     );
   }
 
-  if (processingStatus === undefined || book === undefined) {
+  if (processingStatus === undefined) {
     return (
       <ReaderFallback
         title="Loading reader…"

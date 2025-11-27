@@ -35,7 +35,7 @@ export default function SWRegister() {
         }
 
         const notifyWaitingWorker = (worker: ServiceWorker | null) => {
-          if (!worker) {
+          if (!worker || !isMounted) {
             return;
           }
           setWaitingWorker(worker);

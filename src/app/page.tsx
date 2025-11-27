@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Authenticated, Unauthenticated, AuthLoading } from "convex/react";
 import { UserButton } from "@clerk/nextjs";
@@ -40,7 +40,7 @@ function RedirectToLogin() {
   const router = useRouter();
 
   useEffect(() => {
-    router.push("/login");
+    router.replace("/login");
   }, [router]);
 
   return null;
@@ -53,7 +53,7 @@ function LibraryContent() {
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  const books = useQuery(api.books.list, useMemo(() => ({ sortBy }), [sortBy]));
+  const books = useQuery(api.books.list, { sortBy });
   const generateUploadUrl = useMutation(api.books.generateUploadUrl);
   const createBook = useMutation(api.books.create);
   const deleteBook = useMutation(api.books.remove);
