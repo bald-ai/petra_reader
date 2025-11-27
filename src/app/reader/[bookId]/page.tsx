@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, startTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAction, useMutation, useQuery } from "convex/react";
@@ -42,15 +42,6 @@ function buildParagraphsFromChunks(chunks: ChunkRecord[]): Paragraph[] {
   return collected;
 }
 
-function createPlaceholderParagraph(index: number, existing?: Paragraph): Paragraph {
-  return {
-    id: existing?.id ?? -(index + 1),
-    spanish: "",
-    english: existing?.english ?? "",
-    isPlaceholder: true,
-  };
-}
-
 export default function ReaderPage() {
   const router = useRouter();
   const routeParams = useParams<{ bookId: string }>();
@@ -72,7 +63,7 @@ export default function ReaderPage() {
   const totalChunks = processingStatus?.totalChunks ?? 0;
 
   const [chunkRequestRange, setChunkRequestRange] = useState<{ from: number; to: number } | null>(null);
-  const [paragraphs, setParagraphs] = useState<Paragraph[]>([]);
+  const [chunkMap, setChunkMap] = useState<Map<number, Paragraph[]>>(() => new Map());
   const [highestLoadedChunkIndex, setHighestLoadedChunkIndex] = useState(-1);
   const highestLoadedChunkIndexRef = useRef(-1);
   const chunkMetadataRef = useRef<Map<number, { start: number; length: number }>>(new Map());
@@ -85,6 +76,47 @@ export default function ReaderPage() {
   const translationsWarmedUpRef = useRef(false);
   const warmupTranslateWord = useAction(api.translations.translateWord);
   const warmupLookupDefinition = useAction(api.translations.lookupWordDefinition);
+
+  // Derive flattened paragraphs array from chunkMap - O(active chunks) not O(total paragraphs)
+  const paragraphs = useMemo(() => {
+    if (chunkMap.size === 0 || totalChunks <= 0) return [];
+
+    // Find the range of loaded chunks to minimize array size
+    let minChunk = Infinity;
+    let maxChunk = -1;
+    for (const chunkIndex of chunkMap.keys()) {
+      minChunk = Math.min(minChunk, chunkIndex);
+      maxChunk = Math.max(maxChunk, chunkIndex);
+    }
+
+    if (maxChunk < 0) return [];
+
+    // Calculate the total size needed (only up to highest loaded chunk)
+    const totalSize = Math.min((maxChunk + 1) * CHUNK_SIZE, totalChunks * CHUNK_SIZE);
+    const result: Paragraph[] = new Array(totalSize);
+
+    // Fill with placeholders
+    for (let i = 0; i < totalSize; i++) {
+      result[i] = {
+        id: -(i + 1),
+        spanish: "",
+        english: "",
+        isPlaceholder: true,
+      };
+    }
+
+    // Overlay active chunks
+    for (const [chunkIndex, paras] of chunkMap) {
+      const start = chunkIndex * CHUNK_SIZE;
+      for (let i = 0; i < paras.length; i++) {
+        if (start + i < totalSize) {
+          result[start + i] = paras[i];
+        }
+      }
+    }
+
+    return result;
+  }, [chunkMap, totalChunks]);
 
   const chunkRequestArgs =
     bookId && chunkRequestRange
@@ -240,22 +272,12 @@ export default function ReaderPage() {
     if (toPrune.length === 0) {
       return;
     }
-    setParagraphs((prev) => {
-      if (prev.length === 0) {
-        return prev;
-      }
-      const next = [...prev];
+    // O(k) where k = chunks to prune, not O(n) where n = total paragraphs
+    setChunkMap((prev) => {
+      const next = new Map(prev);
       for (const chunkIndex of toPrune) {
-        const metadata = chunkMetadataRef.current.get(chunkIndex);
-        if (!metadata) {
-          activeChunks.delete(chunkIndex);
-          continue;
-        }
-        for (let offset = 0; offset < metadata.length; offset++) {
-          const paragraphIndex = metadata.start + offset;
-          const existing = next[paragraphIndex];
-          next[paragraphIndex] = createPlaceholderParagraph(paragraphIndex, existing);
-        }
+        next.delete(chunkIndex);
+        chunkMetadataRef.current.delete(chunkIndex);
         activeChunks.delete(chunkIndex);
       }
       return next;
@@ -348,7 +370,7 @@ export default function ReaderPage() {
       savePositionTimeoutRef.current = null;
     }
     setChunkRequestRange((prev) => (prev === null ? prev : null));
-    setParagraphs((prev) => (prev.length > 0 ? [] : prev));
+    setChunkMap((prev) => (prev.size > 0 ? new Map() : prev));
   }, []);
 
   useEffect(() => {
@@ -443,19 +465,12 @@ export default function ReaderPage() {
 
     startTransition(() => {
       let batchMaxIndex = highestLoadedChunkIndexRef.current;
-      setParagraphs((prev) => {
-        const next = prev.length > 0 ? [...prev] : [];
+      // O(k) where k = new chunks, not O(n) where n = total paragraphs
+      setChunkMap((prev) => {
+        const next = new Map(prev);
         for (const entry of prepared) {
           const chunkStart = entry.chunkIndex * CHUNK_SIZE;
-          const requiredLength = chunkStart + entry.paragraphs.length;
-          if (next.length < requiredLength) {
-            for (let i = next.length; i < requiredLength; i++) {
-              next[i] = createPlaceholderParagraph(i, next[i]);
-            }
-          }
-          for (let offset = 0; offset < entry.paragraphs.length; offset++) {
-            next[chunkStart + offset] = entry.paragraphs[offset];
-          }
+          next.set(entry.chunkIndex, entry.paragraphs);
           chunkMetadataRef.current.set(entry.chunkIndex, {
             start: chunkStart,
             length: entry.paragraphs.length,
