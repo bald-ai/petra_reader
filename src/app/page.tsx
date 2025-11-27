@@ -227,7 +227,7 @@ function LibraryContent() {
                       e.stopPropagation();
                       handleDeleteBook(book._id, book.title);
                     }}
-                    className="absolute right-2 top-2 z-10 rounded-full bg-background/90 p-2 text-red-500 opacity-0 shadow-sm transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 dark:bg-background/80 dark:hover:bg-red-950/50"
+                    className="absolute right-2 top-2 z-10 rounded-full bg-background/90 p-2 text-red-500 shadow-sm transition hover:bg-red-50 hover:text-red-600 dark:bg-background/80 dark:hover:bg-red-950/50"
                     title="Delete book"
                   >
                     <Trash2 className="h-4 w-4" />
