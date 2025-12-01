@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useAction } from "convex/react"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ChevronDown, ChevronLeft, Link2, Loader2, MoreVertical, X } from "lucide-react"
+import { ChevronDown, ChevronLeft, Link2, Loader2, MoreVertical, X, Volume2, Square } from "lucide-react"
 import { api } from "@convex/_generated/api"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -122,6 +122,10 @@ export default function LanguageReader({
   const [nonConjugatableWords, setNonConjugatableWords] = useState<Set<string>>(new Set())
   const [isConjugationLoading, setIsConjugationLoading] = useState(false)
   const [conjugationError, setConjugationError] = useState<string | null>(null)
+  const [isTTSLoading, setIsTTSLoading] = useState(false)
+  const [ttsError, setTtsError] = useState<string | null>(null)
+  const [paragraphTTSLoading, setParagraphTTSLoading] = useState<number | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
   const wordTranslationsCacheRef = useRef<Map<string, WordTranslationResult>>(new Map())
   const conjugationCacheRef = useRef<Map<string, ConjugationsByTense>>(new Map())
   const wordTranslationRequestIdRef = useRef(0)
@@ -801,6 +805,162 @@ export default function LanguageReader({
     setReaderFontSize(clampFontSize(size))
   }, [])
 
+  const [definitionTTSPlaying, setDefinitionTTSPlaying] = useState(false)
+
+  const stopDefinitionTTS = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setIsTTSLoading(false);
+    setDefinitionTTSPlaying(false);
+  }, [])
+
+  const handleTTS = useCallback(async (text: string, isDefinition = false) => {
+    // If definition is playing, stop it
+    if (isDefinition && definitionTTSPlaying) {
+      stopDefinitionTTS();
+      return;
+    }
+
+    if (!text || isTTSLoading) return;
+
+    setIsTTSLoading(true);
+    setTtsError(null);
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setDefinitionTTSPlaying(false);
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate audio');
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audioRef.current = audio;
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setIsTTSLoading(false);
+        setDefinitionTTSPlaying(false);
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setIsTTSLoading(false);
+        setDefinitionTTSPlaying(false);
+        setTtsError('Failed to play audio');
+      };
+
+      await audio.play();
+      setIsTTSLoading(false);
+      if (isDefinition) {
+        setDefinitionTTSPlaying(true);
+      }
+    } catch (error) {
+      console.error('TTS error:', error);
+      setTtsError('Failed to generate audio');
+      setIsTTSLoading(false);
+    }
+  }, [isTTSLoading, definitionTTSPlaying, stopDefinitionTTS])
+
+  const [paragraphTTSPlaying, setParagraphTTSPlaying] = useState<number | null>(null)
+
+  const stopParagraphTTS = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setParagraphTTSLoading(null);
+    setParagraphTTSPlaying(null);
+  }, [])
+
+  const handleParagraphTTS = useCallback(async (paragraph: Paragraph) => {
+    // If this paragraph is currently playing, stop it
+    if (paragraphTTSPlaying === paragraph.id) {
+      stopParagraphTTS();
+      return;
+    }
+
+    if (!paragraph.spanish || paragraphTTSLoading === paragraph.id) return;
+
+    // Stop any currently playing audio
+    stopParagraphTTS();
+
+    setParagraphTTSLoading(paragraph.id);
+    setTtsError(null);
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: paragraph.spanish }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate audio');
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      
+      audioRef.current = audio;
+      
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setParagraphTTSLoading(null);
+        setParagraphTTSPlaying(null);
+      };
+
+      audio.onerror = () => {
+        URL.revokeObjectURL(audioUrl);
+        audioRef.current = null;
+        setParagraphTTSLoading(null);
+        setParagraphTTSPlaying(null);
+        setTtsError('Failed to play audio');
+      };
+
+      await audio.play();
+      setParagraphTTSLoading(null);
+      setParagraphTTSPlaying(paragraph.id);
+    } catch (error) {
+      console.error('TTS error:', error);
+      setTtsError('Failed to generate audio');
+      setParagraphTTSLoading(null);
+    }
+  }, [paragraphTTSLoading, paragraphTTSPlaying, stopParagraphTTS])
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [])
+
   const renderClickableText = useCallback((paragraph: Paragraph) => {
     if (paragraph.isPlaceholder) {
       return (
@@ -879,9 +1039,34 @@ export default function LanguageReader({
                       <span className="text-lg font-light text-muted-foreground/90">Translating…</span>
                     </div>
                   ) : wordTranslationResult?.translation ? (
-                    <p className="font-serif text-xl font-medium text-foreground mt-1">
-                      {wordTranslationResult.translation}
-                    </p>
+                    <>
+                      <p className="font-serif text-xl font-medium text-foreground mt-1">
+                        {wordTranslationResult.translation}
+                      </p>
+                      {wordTranslationResult.word && (
+                        <div className="mt-3 flex justify-center">
+                          <Button
+                            onClick={() => handleTTS(wordTranslationResult.word)}
+                            disabled={isTTSLoading}
+                            variant="outline"
+                            size="sm"
+                            className="gap-2"
+                          >
+                            {isTTSLoading ? (
+                              <>
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                <span className="text-xs">Generating...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 className="h-3 w-3" />
+                                <span className="text-xs">Listen</span>
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </>
                   ) : null}
                 </div>
               </div>
@@ -977,6 +1162,32 @@ export default function LanguageReader({
                          ) : (
                          <>
                            <p className="text-2xl font-serif font-medium">{wordTranslationResult?.translation}</p>
+                           {wordTranslationResult?.word && (
+                             <div className="mt-6 flex justify-center">
+                               <Button
+                                 onClick={() => handleTTS(wordTranslationResult.word)}
+                                 disabled={isTTSLoading}
+                                 variant="outline"
+                                 size="lg"
+                                 className="gap-2"
+                               >
+                                 {isTTSLoading ? (
+                                   <>
+                                     <Loader2 className="h-4 w-4 animate-spin" />
+                                     <span>Generating audio...</span>
+                                   </>
+                                 ) : (
+                                   <>
+                                     <Volume2 className="h-4 w-4" />
+                                     <span>Listen</span>
+                                   </>
+                                 )}
+                               </Button>
+                             </div>
+                           )}
+                           {ttsError && (
+                             <p className="text-sm text-destructive mt-2">{ttsError}</p>
+                           )}
                           </>
                         )}
                        </div>
@@ -992,13 +1203,39 @@ export default function LanguageReader({
                          </div>
                        ) : wordDefinitionError ? (
                          <p className="text-sm font-medium text-destructive py-2">{wordDefinitionError}</p>
-                       ) : wordDefinition ? (
-                         <div className="text-center space-y-4">
-                           <p className="font-serif text-lg font-light text-muted-foreground/80 leading-relaxed max-w-lg mx-auto">
-                             {wordDefinition}
-                           </p>
-                         </div>
-                       ) : (
+                      ) : wordDefinition ? (
+                        <div className="text-center space-y-4">
+                          <p className="font-serif text-lg font-light text-muted-foreground/80 leading-relaxed max-w-lg mx-auto">
+                            {wordDefinition}
+                          </p>
+                          <div className="mt-6 flex justify-center">
+                            <Button
+                              onClick={() => handleTTS(wordDefinition, true)}
+                              disabled={isTTSLoading && !definitionTTSPlaying}
+                              variant="outline"
+                              size="lg"
+                              className="gap-2"
+                            >
+                              {isTTSLoading && !definitionTTSPlaying ? (
+                                <>
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <span>Generating audio...</span>
+                                </>
+                              ) : definitionTTSPlaying ? (
+                                <>
+                                  <Square className="h-3.5 w-3.5 fill-current" />
+                                  <span>Stop</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 className="h-4 w-4" />
+                                  <span>Listen</span>
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
                          <p className="text-sm text-muted-foreground">No definition available.</p>
                        )}
                      </div>
@@ -1013,20 +1250,31 @@ export default function LanguageReader({
                          </div>
                        )}
                        <h4 className="font-medium capitalize text-muted-foreground mb-4 text-center text-lg">{activeConjugationTense}</h4>
-                       {conjugationError ? (
-                         <p className="text-sm font-medium text-destructive text-center">{conjugationError}</p>
-                       ) : activeConjugations.length > 0 ? (
-                         <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-base">
-                           {activeConjugations.map((item, i) => (
-                             <div key={`${item.pronoun}-${i}`} className="contents">
-                               <span className="text-muted-foreground/60 text-right">{item.pronoun}</span>
-                               <span className="font-medium text-foreground/80">{item.form}</span>
-                             </div>
-                           ))}
-                         </div>
-                       ) : !isConjugationLoading ? (
-                         <p className="text-sm text-muted-foreground text-center">No conjugations available yet.</p>
-                       ) : null}
+                      {conjugationError ? (
+                        <p className="text-sm font-medium text-destructive text-center">{conjugationError}</p>
+                      ) : activeConjugations.length > 0 ? (
+                        <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-3 text-base items-center">
+                          {activeConjugations.map((item, i) => (
+                            <div key={`${item.pronoun}-${i}`} className="contents">
+                              <span className="text-muted-foreground/60 text-right">{item.pronoun}</span>
+                              <span className="font-medium text-foreground/80">{item.form}</span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 opacity-60 hover:opacity-100 transition-opacity"
+                                onClick={() => handleTTS(item.form)}
+                                disabled={isTTSLoading}
+                                aria-label={`Listen to ${item.form}`}
+                                title={`Listen to ${item.form}`}
+                              >
+                                <Volume2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : !isConjugationLoading ? (
+                        <p className="text-sm text-muted-foreground text-center">No conjugations available yet.</p>
+                      ) : null}
                      </div>
                    )}
                  </div>
@@ -1229,93 +1477,115 @@ export default function LanguageReader({
                           {renderClickableText(paragraph)}
                         </p>
                         {hasTranslation && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className={cn(
-                              "h-8 w-8 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
-                              "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
-                            )}
-                            onClick={() => handleParagraphClick(paragraph)}
-                            aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
-                            title={translationButtonTitle}
-                            disabled={disableTranslationToggle}
-                          >
-                            {isTranslationVisible ? (
-                              <X className="h-4 w-4" />
-                            ) : (
-                              <Link2 className="h-4 w-4" />
-                            )}
-                          </Button>
-                        )}
+                                          <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            className={cn(
+                                              "h-8 w-8 shrink-0 -translate-y-0.5 opacity-35 transition-all duration-200 hover:opacity-75",
+                                              "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-65 sm:hover:opacity-80",
+                                            )}
+                                            onClick={() => handleParagraphClick(paragraph)}
+                                            aria-label={isTranslationVisible ? "Hide translation" : "Show translation"}
+                                            title={translationButtonTitle}
+                                            disabled={disableTranslationToggle}
+                                          >
+                                            {isTranslationVisible ? (
+                                              <X className="h-4 w-4" />
+                                            ) : (
+                                              <Link2 className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        )}
                       </div>
                     )}
                     {!isHeading && (
                       <div
                         className={cn(
-                          "overflow-hidden transition-all duration-300 ease-out",
+                          "transition-all duration-300 ease-out",
                           isTranslationVisible && hasTranslation
                             ? "max-h-[1000px] opacity-100"
-                            : "max-h-0 opacity-0"
+                            : "max-h-0 opacity-0 overflow-hidden"
                         )}
                       >
                         <div
-                          className={cn(
-                            "pt-3",
-                            hasTranslation && "flex items-baseline gap-1 px-1 sm:px-0 sm:items-start sm:gap-0",
-                          )}
-                        >
-                          {hasTranslation && (
-                            <div
-                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
-                              aria-hidden="true"
-                            />
-                          )}
-                          {(() => {
-                            if (!isTranslationVisible || !hasTranslation) {
-                              return null
-                            }
-                            const translatedText = translations[paragraph.id]
-                            const translationError = translationErrors[paragraph.id]
-                            const isLoading = loadingTranslations.has(paragraph.id)
-                            
-                            if (isLoading) {
-                              return (
-                                <span className="inline-flex items-center gap-2 text-muted-foreground">
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                  Translating…
-                                </span>
-                              )
-                            }
-                            if (translationError) {
-                              return <span className="text-sm font-medium text-destructive">{translationError}</span>
-                            }
-                            if (translatedText) {
-                              return (
-                                <p
-                                  className="flex-1 font-serif leading-relaxed text-muted-foreground/70 text-left tracking-[0.01em] [text-wrap:pretty]"
-                                  style={{ fontSize: `${readerFontSize}px` }}
-                                >
-                                  {translatedText}
-                                </p>
-                              )
-                            }
-                            return (
-                              <p
-                                className="flex-1 font-serif leading-relaxed text-muted-foreground/90 text-left tracking-[0.01em] [text-wrap:pretty]"
-                                style={{ fontSize: `${readerFontSize}px` }}
-                              >
-                                {paragraph.english}
-                              </p>
-                            )
-                          })()}
-                          {hasTranslation && (
-                            <div
-                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </div>
+                                          className={cn(
+                                            "group relative pt-3",
+                                            hasTranslation && "flex items-baseline gap-1 px-1 sm:px-0 sm:items-start sm:gap-0",
+                                          )}
+                                        >
+                                          {hasTranslation && (
+                                            <div
+                                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
+                                              aria-hidden="true"
+                                            />
+                                          )}
+                                          {(() => {
+                                            if (!isTranslationVisible || !hasTranslation) {
+                                              return null
+                                            }
+                                            const translatedText = translations[paragraph.id]
+                                            const translationError = translationErrors[paragraph.id]
+                                            const isLoading = loadingTranslations.has(paragraph.id)
+                                            
+                                            if (isLoading) {
+                                              return (
+                                                <span className="inline-flex items-center gap-2 text-muted-foreground">
+                                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                                  Translating…
+                                                </span>
+                                              )
+                                            }
+                                            if (translationError) {
+                                              return <span className="text-sm font-medium text-destructive">{translationError}</span>
+                                            }
+                                            if (translatedText) {
+                                              return (
+                                                <p
+                                                  className="flex-1 font-serif leading-relaxed text-muted-foreground/70 text-left tracking-[0.01em] [text-wrap:pretty]"
+                                                  style={{ fontSize: `${readerFontSize}px` }}
+                                                >
+                                                  {translatedText}
+                                                </p>
+                                              )
+                                            }
+                                            return (
+                                              <p
+                                                className="flex-1 font-serif leading-relaxed text-muted-foreground/90 text-left tracking-[0.01em] [text-wrap:pretty]"
+                                                style={{ fontSize: `${readerFontSize}px` }}
+                                              >
+                                                {paragraph.english}
+                                              </p>
+                                            )
+                                          })()}
+                                          {hasTranslation && isTranslationVisible && (
+                                            <Button
+                                              variant="ghost"
+                                              size="icon"
+                                              className={cn(
+                                                "h-8 w-8 shrink-0 -translate-y-0.5 opacity-70 transition-all duration-200 hover:opacity-100",
+                                                "sm:absolute sm:-right-12 sm:top-0 sm:h-9 sm:w-9 sm:translate-y-0 sm:opacity-80 sm:hover:opacity-100",
+                                              )}
+                                              onClick={() => handleParagraphTTS(paragraph)}
+                                              disabled={paragraphTTSLoading === paragraph.id}
+                                              aria-label={paragraphTTSPlaying === paragraph.id ? "Stop audio" : "Play paragraph audio"}
+                                              title={paragraphTTSPlaying === paragraph.id ? "Stop" : "Listen to paragraph"}
+                                            >
+                                              {paragraphTTSLoading === paragraph.id ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                              ) : paragraphTTSPlaying === paragraph.id ? (
+                                                <Square className="h-3.5 w-3.5 fill-current" />
+                                              ) : (
+                                                <Volume2 className="h-4 w-4" />
+                                              )}
+                                            </Button>
+                                          )}
+                                          {hasTranslation && !isTranslationVisible && (
+                                            <div
+                                              className="h-8 w-8 shrink-0 select-none opacity-0 sm:hidden"
+                                              aria-hidden="true"
+                                            />
+                                          )}
+                                        </div>
                       </div>
                     )}
                   </div>
