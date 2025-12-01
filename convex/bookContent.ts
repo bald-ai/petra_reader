@@ -13,7 +13,7 @@ export const processBook = action({
     bookId: v.id("books"),
   },
   handler: async (ctx, { bookId }) => {
-    const book = await ctx.runQuery(api.books.getInternal, { bookId });
+    const book = await ctx.runQuery(internal.books.getInternal, { bookId });
     if (!book) {
       throw new Error("Book not found.");
     }

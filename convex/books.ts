@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -63,6 +63,10 @@ async function getCurrentUser(ctx: QueryCtx) {
 export const generateUploadUrl = mutation({
   args: {},
   handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new Error("Unauthenticated");
+    }
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -103,7 +107,7 @@ export const create = mutation({
       chapters: [],
     });
 
-    ctx.scheduler.runAfter(0, api.bookContent.processBook, { bookId });
+    await ctx.scheduler.runAfter(0, api.bookContent.processBook, { bookId });
 
     return bookId;
   },
@@ -321,7 +325,7 @@ export const get = query({
   },
 });
 
-export const getInternal = query({
+export const getInternal = internalQuery({
   args: {
     bookId: v.id("books"),
   },
@@ -399,13 +403,15 @@ export const insertChunks = internalMutation({
     ),
   },
   handler: async (ctx, { bookId, chunks }) => {
-    for (const chunk of chunks) {
-      await ctx.db.insert("bookChunks", {
-        bookId,
-        chunkIndex: chunk.chunkIndex,
-        paragraphs: chunk.paragraphs,
-      });
-    }
+    await Promise.all(
+      chunks.map((chunk) =>
+        ctx.db.insert("bookChunks", {
+          bookId,
+          chunkIndex: chunk.chunkIndex,
+          paragraphs: chunk.paragraphs,
+        })
+      )
+    );
   },
 });
 
