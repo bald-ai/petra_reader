@@ -420,7 +420,7 @@ export async function streamParagraphsFromEpub(
 
       // Method C: Use HTML heading as fallback
       if (!chapterTitle) {
-        chapterTitle = chapterContent.heading ?? null;
+        chapterTitle = chapterContent.heading ?? undefined;
       }
 
       if (chapterTitle) {
